@@ -17,5 +17,5 @@ npm install
 npm run dev
 ```
 
-El frontend estarà disponible a:
+El frontend estarà disponible a: 
 http://localhost:5173
