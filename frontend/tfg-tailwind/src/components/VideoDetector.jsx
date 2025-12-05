@@ -6,8 +6,9 @@ function VideoDetector() {
 	const [result, setResult] = useState(null);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
-	const [conf, setConf] = useState(0.25); // confianza mínima
-	const [stride, setStride] = useState(5); // frame stride
+	const [conf, setConf] = useState(0.25); 
+	const [stride, setStride] = useState(5);
+	const [selectedSpecies, setSelectedSpecies] = useState("all"); 
 	const videoRef = useRef(null);
 
 	const API_URL_VIDEO = "http://localhost:8000/predict_video";
@@ -17,6 +18,7 @@ function VideoDetector() {
 		setSelectedFile(file);
 		setResult(null);
 		setError("");
+		setSelectedSpecies("all");
 
 		if (file) {
 			const url = URL.createObjectURL(file);
@@ -96,6 +98,12 @@ function VideoDetector() {
 		videoRef.current.play();
 	};
 
+	const handleSeekToTime = time => {
+		if (!videoRef.current || time == null || isNaN(time)) return;
+		videoRef.current.currentTime = time;
+		videoRef.current.play();
+	};
+
 	const handleDownloadImage = frame => {
 		if (!frame.image_b64) return;
 		const link = document.createElement("a");
@@ -151,6 +159,10 @@ function VideoDetector() {
 		a.download = "deteccions_video.csv";
 		a.click();
 	};
+
+	const speciesOptions = result?.detections_per_frame ? Array.from(new Set(result.detections_per_frame.flatMap(f => f.detections.map(d => d.class)))) : [];
+
+	const filteredKeyFrames = !result?.key_frames ? [] : selectedSpecies === "all" ? result.key_frames : result.key_frames.filter(frame => frame.detections.some(d => d.class === selectedSpecies));
 
 	return (
 		<main className="bg-white/80 backdrop-blur-xl border border-white/70 shadow-xl rounded-3xl p-6 sm:p-8 lg:p-10 flex flex-col gap-8">
@@ -277,6 +289,37 @@ function VideoDetector() {
 								</p>
 							</div>
 
+							{/* Línia temporal de deteccions */}
+							{totalDuration && result.segments && result.segments.length > 0 && (
+								<div className="space-y-2">
+									<p className="text-xs font-medium uppercase tracking-wide text-slate-400">Línia temporal de deteccions</p>
+									<div className="relative h-2 rounded-full bg-slate-200 overflow-hidden">
+										{result.segments.map((seg, idx) => {
+											const startRatio = seg.start_time && totalDuration ? seg.start_time / totalDuration : 0;
+											const endRatio = seg.end_time && totalDuration ? seg.end_time / totalDuration : startRatio;
+											const widthRatio = Math.max(endRatio - startRatio, 0.01);
+
+											return (
+												<button
+													type="button"
+													key={idx}
+													className="absolute top-0 h-full bg-indigo-400/80 hover:bg-indigo-500 transition"
+													style={{
+														left: `${startRatio * 100}%`,
+														width: `${widthRatio * 100}%`
+													}}
+													onClick={() => handleSeekToTime(seg.start_time)}
+												/>
+											);
+										})}
+									</div>
+									<div className="flex justify-between text-[10px] text-slate-400">
+										<span>0:00</span>
+										<span>{formatTime(totalDuration)}</span>
+									</div>
+								</div>
+							)}
+
 							{/* Ranking d'espècies */}
 							<div className="space-y-1 text-xs sm:text-sm text-slate-700">
 								<p className="text-xs font-medium uppercase tracking-wide text-indigo-600">Espècies més detectades</p>
@@ -334,15 +377,30 @@ function VideoDetector() {
 									)}
 								</div>
 
-								{/* Fotogrames representatius amb imatge + accions */}
+								{/* Fotogrames representatius amb filtre per espècie */}
 								<div className="space-y-2">
 									<p className="text-xs font-medium uppercase tracking-wide text-slate-400">Fotogrames representatius amb aus detectades</p>
 
+									{/* Filtre per espècie */}
+									{speciesOptions.length > 0 && (
+										<div className="space-y-1 text-xs text-slate-600">
+											<label className="font-medium">Filtrar fotogrames per espècie</label>
+											<select value={selectedSpecies} onChange={e => setSelectedSpecies(e.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+												<option value="all">Totes les espècies</option>
+												{speciesOptions.map(sp => (
+													<option key={sp} value={sp}>
+														{sp}
+													</option>
+												))}
+											</select>
+										</div>
+									)}
+
 									{(!result.key_frames || result.key_frames.length === 0) && <p className="text-sm text-slate-500">No hi ha fotogrames representatius disponibles.</p>}
 
-									{result.key_frames && result.key_frames.length > 0 && (
+									{filteredKeyFrames.length > 0 && (
 										<ul className="space-y-3 max-h-[22rem] overflow-auto pr-1 text-xs sm:text-sm text-slate-700">
-											{result.key_frames.map((frame, idx) => (
+											{filteredKeyFrames.map((frame, idx) => (
 												<li key={frame.frame_index ?? idx} className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3 flex flex-col gap-2">
 													<div className="flex items-center justify-between gap-3">
 														<div className="flex items-center gap-2">

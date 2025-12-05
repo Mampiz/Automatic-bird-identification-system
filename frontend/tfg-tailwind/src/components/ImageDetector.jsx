@@ -7,7 +7,8 @@ function ImageDetector() {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
 	const [imgLoaded, setImgLoaded] = useState(false);
-	const [conf, setConf] = useState(0.25); // confianza mínima
+	const [conf, setConf] = useState(0.25); // confiança mínima
+	const [selectedSpecies, setSelectedSpecies] = useState("all"); // filtre d'espècie
 
 	const API_URL = "http://localhost:8000/predict";
 
@@ -17,6 +18,7 @@ function ImageDetector() {
 		setResult(null);
 		setError("");
 		setImgLoaded(false);
+		setSelectedSpecies("all");
 
 		if (file) {
 			const url = URL.createObjectURL(file);
@@ -76,10 +78,15 @@ function ImageDetector() {
 	};
 
 	// Llista d’espècies sense duplicats
+	const getSpeciesList = detections => {
+		if (!detections || detections.length === 0) return [];
+		return Array.from(new Set(detections.map(d => d.class)));
+	};
+
 	const formatClasses = detections => {
-		if (!detections || detections.length === 0) return "Cap au detectada";
-		const uniqueClasses = Array.from(new Set(detections.map(d => d.class)));
-		return uniqueClasses.join(", ");
+		const list = getSpeciesList(detections);
+		if (list.length === 0) return "Cap au detectada";
+		return list.join(", ");
 	};
 
 	// Descarregar una imatge amb les caixes dibuixades (es genera al client)
@@ -128,6 +135,10 @@ function ImageDetector() {
 		};
 		img.src = previewUrl;
 	};
+
+	const filteredDetections = selectedSpecies === "all" || !result?.detections ? result?.detections ?? [] : result.detections.filter(det => det.class === selectedSpecies);
+
+	const speciesOptions = result ? getSpeciesList(result.detections) : [];
 
 	return (
 		<main className="bg-white/80 backdrop-blur-xl border border-white/70 shadow-xl rounded-3xl p-6 sm:p-8 lg:p-10 flex flex-col gap-8">
@@ -215,18 +226,19 @@ function ImageDetector() {
 								<div className="absolute inset-0 pointer-events-none">
 									{result.detections.map((det, idx) => {
 										const [x1, y1, x2, y2] = det.bbox_norm;
+										const dimmed = selectedSpecies !== "all" && det.class !== selectedSpecies;
 
 										return (
 											<div
 												key={idx}
-												className="absolute border-2 border-emerald-400 rounded-md shadow-[0_0_0_1px_rgba(16,185,129,0.4)]"
+												className={`absolute rounded-md shadow-[0_0_0_1px_rgba(16,185,129,0.4)] transition ${dimmed ? "border border-emerald-200/40 opacity-40" : "border-2 border-emerald-400 opacity-100"}`}
 												style={{
 													left: `${x1 * 100}%`,
 													top: `${y1 * 100}%`,
 													width: `${(x2 - x1) * 100}%`,
 													height: `${(y2 - y1) * 100}%`
 												}}>
-												<span className="absolute -top-5 left-0 bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded shadow">
+												<span className={`absolute -top-5 left-0 text-[10px] px-1.5 py-0.5 rounded shadow ${dimmed ? "bg-emerald-400/70 text-white/80" : "bg-emerald-500 text-white"}`}>
 													{det.class} ({(det.confidence * 100).toFixed(1)}%)
 												</span>
 											</div>
@@ -276,13 +288,28 @@ function ImageDetector() {
 									)}
 								</div>
 
+								{/* Filtre per espècie */}
+								{speciesOptions.length > 0 && (
+									<div className="space-y-1 text-xs text-slate-600">
+										<label className="font-medium">Filtrar deteccions per espècie</label>
+										<select value={selectedSpecies} onChange={e => setSelectedSpecies(e.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500">
+											<option value="all">Totes les espècies</option>
+											{speciesOptions.map(sp => (
+												<option key={sp} value={sp}>
+													{sp}
+												</option>
+											))}
+										</select>
+									</div>
+								)}
+
 								{result.detections.length === 0 ? (
 									<p className="text-sm text-slate-500">No s'ha detectat cap au amb la confiança mínima configurada.</p>
 								) : (
 									<div className="space-y-2">
 										<p className="text-xs font-medium uppercase tracking-wide text-slate-400">Deteccions</p>
 										<ul className="space-y-1 max-h-60 overflow-auto pr-1">
-											{result.detections.map((det, idx) => (
+											{filteredDetections.map((det, idx) => (
 												<li key={idx} className="flex items-center justify-between text-xs sm:text-sm text-slate-700">
 													<span className="flex items-center gap-2">
 														<span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">{idx + 1}</span>
