@@ -1,6 +1,9 @@
-import {useState} from "react";
+import {useEffect, useRef, useState} from "react";
+import {useAuth} from "../auth/AuthContext";
 
 function ImageDetector() {
+	const {token} = useAuth();
+
 	const [selectedFile, setSelectedFile] = useState(null);
 	const [previewUrl, setPreviewUrl] = useState(null);
 	const [result, setResult] = useState(null);
@@ -9,8 +12,18 @@ function ImageDetector() {
 	const [imgLoaded, setImgLoaded] = useState(false);
 	const [conf, setConf] = useState(0.25); // confiança mínima
 	const [selectedSpecies, setSelectedSpecies] = useState("all"); // filtre d'espècie
+	const [activeDetectionIndex, setActiveDetectionIndex] = useState(null); // detecció destacada
+	const [showFullscreen, setShowFullscreen] = useState(false); // imatge a pantalla completa
+
+	const previewContainerRef = useRef(null);
 
 	const API_URL = "http://localhost:8000/predict";
+
+	useEffect(() => {
+		return () => {
+			if (previewUrl) URL.revokeObjectURL(previewUrl);
+		};
+	}, [previewUrl]);
 
 	const handleFileChange = e => {
 		const file = e.target.files[0];
@@ -19,6 +32,10 @@ function ImageDetector() {
 		setError("");
 		setImgLoaded(false);
 		setSelectedSpecies("all");
+		setActiveDetectionIndex(null);
+		setShowFullscreen(false);
+
+		if (previewUrl) URL.revokeObjectURL(previewUrl);
 
 		if (file) {
 			const url = URL.createObjectURL(file);
@@ -30,6 +47,12 @@ function ImageDetector() {
 
 	const handleSubmit = async e => {
 		e.preventDefault();
+
+		if (!token) {
+			setError("No estás autenticado. Haz login primero.");
+			return;
+		}
+
 		if (!selectedFile) {
 			setError("Selecciona primer una imatge.");
 			return;
@@ -38,6 +61,7 @@ function ImageDetector() {
 		setLoading(true);
 		setError("");
 		setResult(null);
+		setActiveDetectionIndex(null);
 
 		try {
 			const formData = new FormData();
@@ -46,21 +70,18 @@ function ImageDetector() {
 
 			const res = await fetch(API_URL, {
 				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`
+				},
 				body: formData
 			});
 
+			const data = await res.json().catch(() => ({}));
+
 			if (!res.ok) {
-				let errMsg = "Error en la predicció";
-				try {
-					const errData = await res.json();
-					errMsg = errData.error || errMsg;
-				} catch {
-					// ignore
-				}
-				throw new Error(errMsg);
+				throw new Error(data.detail || data.error || "Error en la predicció");
 			}
 
-			const data = await res.json();
 			setResult(data);
 		} catch (err) {
 			console.error(err);
@@ -89,7 +110,7 @@ function ImageDetector() {
 		return list.join(", ");
 	};
 
-	// Descarregar una imatge amb les caixes dibuixades (es genera al client)
+	// Descarregar una imatge amb les caixes dibuixades
 	const handleDownloadAnnotated = () => {
 		if (!previewUrl || !result?.detections || result.detections.length === 0) return;
 
@@ -117,13 +138,15 @@ function ImageDetector() {
 				ctx.font = `${Math.max(12, canvas.width * 0.015)}px sans-serif`;
 				const textWidth = ctx.measureText(label).width;
 				const padding = 4;
-				const boxHeight = parseInt(ctx.font, 10) + padding * 2;
+				const fontSize = Math.max(12, canvas.width * 0.015);
+				const boxHeight = fontSize + padding * 2;
 
 				ctx.fillStyle = "rgba(16, 185, 129, 0.9)";
 				ctx.fillRect(x1, Math.max(0, y1 - boxHeight), textWidth + padding * 2, boxHeight);
 
 				ctx.fillStyle = "#ffffff";
-				ctx.fillText(label, x1 + padding, Math.max(0, y1 - boxHeight / 2));
+				ctx.textBaseline = "top";
+				ctx.fillText(label, x1 + padding, Math.max(0, y1 - boxHeight) + padding);
 			});
 
 			const link = document.createElement("a");
@@ -136,14 +159,26 @@ function ImageDetector() {
 		img.src = previewUrl;
 	};
 
-	const filteredDetections = selectedSpecies === "all" || !result?.detections ? result?.detections ?? [] : result.detections.filter(det => det.class === selectedSpecies);
+	const detectionsWithIndex = result?.detections ? result.detections.map((det, idx) => ({...det, _index: idx})) : [];
+
+	const filteredDetections = selectedSpecies === "all" ? detectionsWithIndex : detectionsWithIndex.filter(det => det.class === selectedSpecies);
 
 	const speciesOptions = result ? getSpeciesList(result.detections) : [];
 
+	const handleSelectDetection = originalIndex => {
+		setActiveDetectionIndex(originalIndex);
+		setSelectedSpecies("all");
+
+		const el = document.getElementById(`det-box-${originalIndex}`);
+		if (el) {
+			el.scrollIntoView({behavior: "smooth", block: "center", inline: "center"});
+		}
+	};
+
 	return (
-		<main className="bg-white/80 backdrop-blur-xl border border-white/70 shadow-xl rounded-3xl p-6 sm:p-8 lg:p-10 flex flex-col gap-8">
-			<div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] items-start">
-				{/* Zona d'upload */}
+		<main className="bg-white/80 backdrop-blur-xl border border-white/70 shadow-xl rounded-3xl p-6 sm:p-8 lg:p-10 flex flex-col gap-8 max-w-6xl w-full mx-auto">
+			<div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-start">
+				{/* upload */}
 				<section className="space-y-4">
 					<h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
 						<span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">1</span>
@@ -199,46 +234,46 @@ function ImageDetector() {
 					</form>
 				</section>
 
-				{/* Vista prèvia + resultats */}
+				{/* Vista previa + resultats */}
 				<section className="space-y-5">
-					{/* Vista prèvia amb deteccions */}
+					{/* Vista prev amb deteccions */}
 					<div className="space-y-3">
 						<h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
 							<span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">2</span>
 							Vista prèvia amb deteccions
 						</h2>
 
-						<div className={`relative overflow-hidden rounded-2xl border border-slate-100 bg-slate-100/70 flex justify-center items-center ${!previewUrl || !imgLoaded ? "aspect-[4/3]" : ""}`}>
+						<div ref={previewContainerRef} className={`relative overflow-auto rounded-2xl border border-slate-100 bg-slate-100/70 flex justify-center items-center mx-auto w-full max-w-3xl ${!previewUrl || !imgLoaded ? "aspect-[4/3]" : ""}`}>
 							{!previewUrl && <div className="text-center text-slate-400 text-sm px-4">Encara no heu seleccionat cap imatge. Quan ho facis, la veuràs aquí.</div>}
 
 							{previewUrl && (
-								<img
-									src={previewUrl}
-									alt="preview"
-									className={`max-w-full h-auto object-contain transition-opacity duration-300 ${imgLoaded ? "opacity-100" : "opacity-0"}`}
-									onLoad={() => {
-										setImgLoaded(true);
-									}}
-								/>
+								<>
+									<img src={previewUrl} alt="preview" className={`max-w-full h-auto object-contain transition-opacity duration-300 ${imgLoaded ? "opacity-100" : "opacity-0"}`} onLoad={() => setImgLoaded(true)} />
+									<button type="button" onClick={() => setShowFullscreen(true)} className="pointer-events-auto absolute bottom-3 right-3 rounded-full bg-black/60 text-white text-xs px-3 py-1.5 backdrop-blur-sm hover:bg-black/80">
+										Pantalla completa
+									</button>
+								</>
 							)}
 
 							{imgLoaded && result?.detections && (
 								<div className="absolute inset-0 pointer-events-none">
 									{result.detections.map((det, idx) => {
 										const [x1, y1, x2, y2] = det.bbox_norm;
-										const dimmed = selectedSpecies !== "all" && det.class !== selectedSpecies;
+										const dimmed = selectedSpecies !== "all" && !(det.class === selectedSpecies || activeDetectionIndex === idx);
+										const isActive = activeDetectionIndex === idx;
 
 										return (
 											<div
+												id={`det-box-${idx}`}
 												key={idx}
-												className={`absolute rounded-md shadow-[0_0_0_1px_rgba(16,185,129,0.4)] transition ${dimmed ? "border border-emerald-200/40 opacity-40" : "border-2 border-emerald-400 opacity-100"}`}
+												className={`absolute rounded-md shadow-[0_0_0_1px_rgba(16,185,129,0.4)] transition ${isActive ? "border-4 border-emerald-500 shadow-lg scale-[1.03]" : dimmed ? "border border-emerald-200/40 opacity-30" : "border-2 border-emerald-400 opacity-100"}`}
 												style={{
 													left: `${x1 * 100}%`,
 													top: `${y1 * 100}%`,
 													width: `${(x2 - x1) * 100}%`,
 													height: `${(y2 - y1) * 100}%`
 												}}>
-												<span className={`absolute -top-5 left-0 text-[10px] px-1.5 py-0.5 rounded shadow ${dimmed ? "bg-emerald-400/70 text-white/80" : "bg-emerald-500 text-white"}`}>
+												<span className={`absolute -top-5 left-0 text-[10px] px-1.5 py-0.5 rounded shadow ${isActive ? "bg-emerald-600 text-white" : dimmed ? "bg-emerald-400/70 text-white/80" : "bg-emerald-500 text-white"}`}>
 													{det.class} ({(det.confidence * 100).toFixed(1)}%)
 												</span>
 											</div>
@@ -249,7 +284,7 @@ function ImageDetector() {
 						</div>
 					</div>
 
-					{/* Resultats del model */}
+					{/* Resultats */}
 					<div className="space-y-3">
 						<h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
 							<span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">3</span>
@@ -288,11 +323,17 @@ function ImageDetector() {
 									)}
 								</div>
 
-								{/* Filtre per espècie */}
+								{/* Filtre per especie */}
 								{speciesOptions.length > 0 && (
 									<div className="space-y-1 text-xs text-slate-600">
 										<label className="font-medium">Filtrar deteccions per espècie</label>
-										<select value={selectedSpecies} onChange={e => setSelectedSpecies(e.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500">
+										<select
+											value={selectedSpecies}
+											onChange={e => {
+												setSelectedSpecies(e.target.value);
+												setActiveDetectionIndex(null);
+											}}
+											className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500">
 											<option value="all">Totes les espècies</option>
 											{speciesOptions.map(sp => (
 												<option key={sp} value={sp}>
@@ -300,6 +341,7 @@ function ImageDetector() {
 												</option>
 											))}
 										</select>
+										<p className="text-[11px] text-slate-500">Pots clicar sobre una detecció de la llista per ressaltar la seva caixa a la imatge.</p>
 									</div>
 								)}
 
@@ -310,9 +352,9 @@ function ImageDetector() {
 										<p className="text-xs font-medium uppercase tracking-wide text-slate-400">Deteccions</p>
 										<ul className="space-y-1 max-h-60 overflow-auto pr-1">
 											{filteredDetections.map((det, idx) => (
-												<li key={idx} className="flex items-center justify-between text-xs sm:text-sm text-slate-700">
+												<li key={`${det._index}-${idx}`} onClick={() => handleSelectDetection(det._index)} className={`flex items-center justify-between text-xs sm:text-sm text-slate-700 cursor-pointer rounded-md px-2 py-1 transition ${activeDetectionIndex === det._index ? "bg-emerald-50" : "hover:bg-slate-50"}`}>
 													<span className="flex items-center gap-2">
-														<span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">{idx + 1}</span>
+														<span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500">{det._index + 1}</span>
 														{det.class}
 													</span>
 													<span className="font-medium text-slate-900">{(det.confidence * 100).toFixed(1)}%</span>
@@ -333,6 +375,16 @@ function ImageDetector() {
 					Frontend fet amb <span className="text-emerald-500">React + Tailwind</span>
 				</span>
 			</footer>
+
+			{/* Overlay pantalla completa imatge */}
+			{showFullscreen && previewUrl && (
+				<div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80">
+					<button type="button" onClick={() => setShowFullscreen(false)} className="absolute top-4 right-4 rounded-full bg-white/10 text-white px-3 py-1 text-sm hover:bg-white/20">
+						Tancar ✕
+					</button>
+					<img src={previewUrl} alt="Imatge a pantalla completa" className="max-w-[92vw] max-h-[92vh] object-contain rounded-2xl shadow-2xl border border-white/20" />
+				</div>
+			)}
 		</main>
 	);
 }
