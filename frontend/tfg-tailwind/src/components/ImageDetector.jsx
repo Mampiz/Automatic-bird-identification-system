@@ -1,5 +1,6 @@
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useMemo, useRef, useState} from "react";
 import {useAuth} from "../auth/AuthContext";
+import {API_BASE} from "../lib/api";
 
 function ImageDetector() {
 	const {token} = useAuth();
@@ -10,14 +11,14 @@ function ImageDetector() {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
 	const [imgLoaded, setImgLoaded] = useState(false);
-	const [conf, setConf] = useState(0.25); // confiança mínima
-	const [selectedSpecies, setSelectedSpecies] = useState("all"); // filtre d'espècie
-	const [activeDetectionIndex, setActiveDetectionIndex] = useState(null); // detecció destacada
-	const [showFullscreen, setShowFullscreen] = useState(false); // imatge a pantalla completa
+	const [conf, setConf] = useState(0.25);
+	const [selectedSpecies, setSelectedSpecies] = useState("all");
+	const [activeDetectionIndex, setActiveDetectionIndex] = useState(null);
+	const [showFullscreen, setShowFullscreen] = useState(false);
 
-	const previewContainerRef = useRef(null);
+	const API_URL = `${API_BASE}/predict_image`;
 
-	const API_URL = "http://localhost:8000/predict";
+	const scrollAreaRef = useRef(null);
 
 	useEffect(() => {
 		return () => {
@@ -26,7 +27,8 @@ function ImageDetector() {
 	}, [previewUrl]);
 
 	const handleFileChange = e => {
-		const file = e.target.files[0];
+		const file = e.target.files?.[0] ?? null;
+
 		setSelectedFile(file);
 		setResult(null);
 		setError("");
@@ -37,12 +39,8 @@ function ImageDetector() {
 
 		if (previewUrl) URL.revokeObjectURL(previewUrl);
 
-		if (file) {
-			const url = URL.createObjectURL(file);
-			setPreviewUrl(url);
-		} else {
-			setPreviewUrl(null);
-		}
+		if (file) setPreviewUrl(URL.createObjectURL(file));
+		else setPreviewUrl(null);
 	};
 
 	const handleSubmit = async e => {
@@ -52,7 +50,6 @@ function ImageDetector() {
 			setError("No estás autenticado. Haz login primero.");
 			return;
 		}
-
 		if (!selectedFile) {
 			setError("Selecciona primer una imatge.");
 			return;
@@ -70,17 +67,12 @@ function ImageDetector() {
 
 			const res = await fetch(API_URL, {
 				method: "POST",
-				headers: {
-					Authorization: `Bearer ${token}`
-				},
+				headers: {Authorization: `Bearer ${token}`},
 				body: formData
 			});
 
 			const data = await res.json().catch(() => ({}));
-
-			if (!res.ok) {
-				throw new Error(data.detail || data.error || "Error en la predicció");
-			}
+			if (!res.ok) throw new Error(data.detail || data.error || "Error en la predicció");
 
 			setResult(data);
 		} catch (err) {
@@ -91,17 +83,16 @@ function ImageDetector() {
 		}
 	};
 
-	// Confiança mitjana de totes les deteccions
+	// Helpers
+	const getSpeciesList = detections => {
+		if (!detections || detections.length === 0) return [];
+		return Array.from(new Set(detections.map(d => d.class)));
+	};
+
 	const formatAvgConfidence = detections => {
 		if (!detections || detections.length === 0) return "-";
 		const avg = detections.reduce((acc, d) => acc + (d.confidence ?? 0), 0) / detections.length;
 		return `${(avg * 100).toFixed(1)}%`;
-	};
-
-	// Llista d’espècies sense duplicats
-	const getSpeciesList = detections => {
-		if (!detections || detections.length === 0) return [];
-		return Array.from(new Set(detections.map(d => d.class)));
 	};
 
 	const formatClasses = detections => {
@@ -110,7 +101,21 @@ function ImageDetector() {
 		return list.join(", ");
 	};
 
-	// Descarregar una imatge amb les caixes dibuixades
+	// Normaliza bbox: preferimos bbox_norm (0..1). Si solo viene bbox (px), convertimos a norm usando tamaño real de imagen.
+	// Para descargar anotado usaremos tamaño real -> bbox_norm es ideal, bbox px también vale.
+	const getNormBox = (det, imgW, imgH) => {
+		if (Array.isArray(det?.bbox_norm) && det.bbox_norm.length === 4) {
+			const [x1, y1, x2, y2] = det.bbox_norm;
+			return [x1, y1, x2, y2];
+		}
+		if (Array.isArray(det?.bbox) && det.bbox.length === 4 && imgW && imgH) {
+			const [x1, y1, x2, y2] = det.bbox;
+			return [x1 / imgW, y1 / imgH, x2 / imgW, y2 / imgH];
+		}
+		return null;
+	};
+
+	// Descargar imagen anotada (robusto)
 	const handleDownloadAnnotated = () => {
 		if (!previewUrl || !result?.detections || result.detections.length === 0) return;
 
@@ -123,8 +128,11 @@ function ImageDetector() {
 
 			ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-			result.detections.forEach(det => {
-				const [x1_n, y1_n, x2_n, y2_n] = det.bbox_norm;
+			for (const det of result.detections) {
+				const norm = getNormBox(det, img.naturalWidth, img.naturalHeight);
+				if (!norm) continue;
+
+				const [x1_n, y1_n, x2_n, y2_n] = norm;
 				const x1 = x1_n * canvas.width;
 				const y1 = y1_n * canvas.height;
 				const x2 = x2_n * canvas.width;
@@ -135,19 +143,19 @@ function ImageDetector() {
 				ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
 				const label = `${det.class} ${(det.confidence * 100).toFixed(1)}%`;
-				ctx.font = `${Math.max(12, canvas.width * 0.015)}px sans-serif`;
+				const fontSize = Math.max(12, canvas.width * 0.015);
+				ctx.font = `${fontSize}px sans-serif`;
 				const textWidth = ctx.measureText(label).width;
 				const padding = 4;
-				const fontSize = Math.max(12, canvas.width * 0.015);
-				const boxHeight = fontSize + padding * 2;
+				const boxH = fontSize + padding * 2;
 
 				ctx.fillStyle = "rgba(16, 185, 129, 0.9)";
-				ctx.fillRect(x1, Math.max(0, y1 - boxHeight), textWidth + padding * 2, boxHeight);
+				ctx.fillRect(x1, Math.max(0, y1 - boxH), textWidth + padding * 2, boxH);
 
 				ctx.fillStyle = "#ffffff";
 				ctx.textBaseline = "top";
-				ctx.fillText(label, x1 + padding, Math.max(0, y1 - boxHeight) + padding);
-			});
+				ctx.fillText(label, x1 + padding, Math.max(0, y1 - boxH) + padding);
+			}
 
 			const link = document.createElement("a");
 			link.href = canvas.toDataURL("image/jpeg");
@@ -159,20 +167,69 @@ function ImageDetector() {
 		img.src = previewUrl;
 	};
 
-	const detectionsWithIndex = result?.detections ? result.detections.map((det, idx) => ({...det, _index: idx})) : [];
+	const detectionsWithIndex = useMemo(() => {
+		const dets = result?.detections ?? [];
+		return dets.map((det, idx) => ({...det, _index: idx}));
+	}, [result]);
 
-	const filteredDetections = selectedSpecies === "all" ? detectionsWithIndex : detectionsWithIndex.filter(det => det.class === selectedSpecies);
+	const filteredDetections = useMemo(() => {
+		if (selectedSpecies === "all") return detectionsWithIndex;
+		return detectionsWithIndex.filter(d => d.class === selectedSpecies);
+	}, [detectionsWithIndex, selectedSpecies]);
 
-	const speciesOptions = result ? getSpeciesList(result.detections) : [];
+	const speciesOptions = useMemo(() => {
+		return result ? getSpeciesList(result.detections) : [];
+	}, [result]);
 
 	const handleSelectDetection = originalIndex => {
 		setActiveDetectionIndex(originalIndex);
 		setSelectedSpecies("all");
 
+		// Si el contenedor tiene scroll, centra la caja
 		const el = document.getElementById(`det-box-${originalIndex}`);
-		if (el) {
+		const sc = scrollAreaRef.current;
+		if (el && sc) {
+			// scrollIntoView funciona, pero a veces no centra bien con overflow; esto ayuda.
 			el.scrollIntoView({behavior: "smooth", block: "center", inline: "center"});
 		}
+	};
+
+	const renderBoxes = ({fullscreen = false} = {}) => {
+		if (!imgLoaded || !result?.detections?.length) return null;
+
+		return (
+			<div className="absolute inset-0 pointer-events-none">
+				{result.detections.map((det, idx) => {
+					const norm = getNormBox(det); // en UI, esperamos bbox_norm. Si no viene, no dibujamos.
+					if (!norm) return null;
+
+					const [x1, y1, x2, y2] = norm;
+
+					const dimmed = selectedSpecies !== "all" && !(det.class === selectedSpecies || activeDetectionIndex === idx);
+					const isActive = activeDetectionIndex === idx;
+
+					// En fullscreen hacemos la etiqueta un poco más grande
+					const labelClass = fullscreen ? "text-[11px] px-2 py-1" : "text-[10px] px-1.5 py-0.5";
+
+					return (
+						<div
+							id={`det-box-${idx}`}
+							key={idx}
+							className={`absolute rounded-md transition ${isActive ? "border-[4px] border-emerald-500 shadow-lg scale-[1.02]" : dimmed ? "border border-emerald-200/40 opacity-30" : "border-2 border-emerald-400 opacity-100"}`}
+							style={{
+								left: `${x1 * 100}%`,
+								top: `${y1 * 100}%`,
+								width: `${(x2 - x1) * 100}%`,
+								height: `${(y2 - y1) * 100}%`
+							}}>
+							<span className={`absolute -top-6 left-0 rounded shadow ${labelClass} ${isActive ? "bg-emerald-600 text-white" : dimmed ? "bg-emerald-400/70 text-white/80" : "bg-emerald-500 text-white"}`}>
+								{det.class} ({(det.confidence * 100).toFixed(1)}%)
+							</span>
+						</div>
+					);
+				})}
+			</div>
+		);
 	};
 
 	return (
@@ -218,13 +275,13 @@ function ImageDetector() {
 							</button>
 
 							<span className="text-xs text-slate-500">
-								El processament es fa a<span className="hidden sm:inline"> (http://localhost:8000).</span>
+								Backend: <span className="font-semibold">{API_BASE}</span>
 							</span>
 						</div>
 
 						{error && (
 							<div className="mt-2 rounded-2xl border border-rose-100 bg-rose-50/80 px-4 py-3 text-sm text-rose-700 flex items-start gap-2">
-								<span className="mt-0.5">⚠️</span>
+								<span className="mt-0.5"></span>
 								<div>
 									<p className="font-semibold">Error</p>
 									<p className="text-xs sm:text-sm">{error}</p>
@@ -243,42 +300,20 @@ function ImageDetector() {
 							Vista prèvia amb deteccions
 						</h2>
 
-						<div ref={previewContainerRef} className={`relative overflow-auto rounded-2xl border border-slate-100 bg-slate-100/70 flex justify-center items-center mx-auto w-full max-w-3xl ${!previewUrl || !imgLoaded ? "aspect-[4/3]" : ""}`}>
+						{/* Importante: hacemos un scroll area y dentro un inline-block relativo que se ajusta EXACTO al tamaño renderizado de la imagen */}
+						<div ref={scrollAreaRef} className={`relative overflow-auto rounded-2xl border border-slate-100 bg-slate-100/70 w-full ${!previewUrl || !imgLoaded ? "aspect-[4/3] flex items-center justify-center" : "p-3"}`}>
 							{!previewUrl && <div className="text-center text-slate-400 text-sm px-4">Encara no heu seleccionat cap imatge. Quan ho facis, la veuràs aquí.</div>}
 
 							{previewUrl && (
-								<>
-									<img src={previewUrl} alt="preview" className={`max-w-full h-auto object-contain transition-opacity duration-300 ${imgLoaded ? "opacity-100" : "opacity-0"}`} onLoad={() => setImgLoaded(true)} />
+								<div className="relative inline-block mx-auto">
+									<img src={previewUrl} alt="preview" className={`block max-w-full h-auto max-h-[70vh] object-contain rounded-xl transition-opacity duration-300 ${imgLoaded ? "opacity-100" : "opacity-0"}`} onLoad={() => setImgLoaded(true)} />
+
+									{/* boxes (aligned) */}
+									{renderBoxes({fullscreen: false})}
+
 									<button type="button" onClick={() => setShowFullscreen(true)} className="pointer-events-auto absolute bottom-3 right-3 rounded-full bg-black/60 text-white text-xs px-3 py-1.5 backdrop-blur-sm hover:bg-black/80">
 										Pantalla completa
 									</button>
-								</>
-							)}
-
-							{imgLoaded && result?.detections && (
-								<div className="absolute inset-0 pointer-events-none">
-									{result.detections.map((det, idx) => {
-										const [x1, y1, x2, y2] = det.bbox_norm;
-										const dimmed = selectedSpecies !== "all" && !(det.class === selectedSpecies || activeDetectionIndex === idx);
-										const isActive = activeDetectionIndex === idx;
-
-										return (
-											<div
-												id={`det-box-${idx}`}
-												key={idx}
-												className={`absolute rounded-md shadow-[0_0_0_1px_rgba(16,185,129,0.4)] transition ${isActive ? "border-4 border-emerald-500 shadow-lg scale-[1.03]" : dimmed ? "border border-emerald-200/40 opacity-30" : "border-2 border-emerald-400 opacity-100"}`}
-												style={{
-													left: `${x1 * 100}%`,
-													top: `${y1 * 100}%`,
-													width: `${(x2 - x1) * 100}%`,
-													height: `${(y2 - y1) * 100}%`
-												}}>
-												<span className={`absolute -top-5 left-0 text-[10px] px-1.5 py-0.5 rounded shadow ${isActive ? "bg-emerald-600 text-white" : dimmed ? "bg-emerald-400/70 text-white/80" : "bg-emerald-500 text-white"}`}>
-													{det.class} ({(det.confidence * 100).toFixed(1)}%)
-												</span>
-											</div>
-										);
-									})}
 								</div>
 							)}
 						</div>
@@ -376,13 +411,19 @@ function ImageDetector() {
 				</span>
 			</footer>
 
-			{/* Overlay pantalla completa imatge */}
+			{/* Overlay pantalla completa imatge (con cajas también) */}
 			{showFullscreen && previewUrl && (
-				<div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80">
+				<div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
 					<button type="button" onClick={() => setShowFullscreen(false)} className="absolute top-4 right-4 rounded-full bg-white/10 text-white px-3 py-1 text-sm hover:bg-white/20">
 						Tancar ✕
 					</button>
-					<img src={previewUrl} alt="Imatge a pantalla completa" className="max-w-[92vw] max-h-[92vh] object-contain rounded-2xl shadow-2xl border border-white/20" />
+
+					<div className="relative inline-block">
+						<img src={previewUrl} alt="Imatge a pantalla completa" className="block max-w-[94vw] max-h-[92vh] object-contain rounded-2xl shadow-2xl border border-white/20" />
+
+						{/* En fullscreen: cajas también */}
+						{renderBoxes({fullscreen: true})}
+					</div>
 				</div>
 			)}
 		</main>

@@ -1,8 +1,6 @@
 import {createContext, useContext, useEffect, useMemo, useState} from "react";
-
+import { API_BASE } from "../lib/api";
 const AuthContext = createContext(null);
-
-const API_BASE = "http://localhost:8000";
 
 export function AuthProvider({children}) {
 	const [token, setToken] = useState(null);

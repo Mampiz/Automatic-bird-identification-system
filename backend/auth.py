@@ -9,17 +9,21 @@ from sqlalchemy.orm import Session
 from db import get_db
 from models import User
 
-
 pwd_context = CryptContext(
     schemes=["argon2"],
     deprecated="auto"
 )
 
-
 # JWT config
-JWT_SECRET = os.getenv("JWT_SECRET", "change_me")
+JWT_SECRET = os.getenv("JWT_SECRET") 
 JWT_ALG = os.getenv("JWT_ALG", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "120"))
+
+ENV = os.getenv("ENV", "dev").lower()
+if not JWT_SECRET:
+    if ENV in ("prod", "production"):
+        raise RuntimeError("JWT_SECRET no definido en producción.")
+    JWT_SECRET = "dev_insecure_change_me"
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 

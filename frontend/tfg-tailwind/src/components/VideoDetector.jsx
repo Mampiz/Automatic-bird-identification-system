@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {useAuth} from "../auth/AuthContext";
+import { API_BASE } from "../lib/api";
 
 function VideoDetector() {
 	const {token} = useAuth();
@@ -34,8 +35,8 @@ function VideoDetector() {
 	const videoRef = useRef(null);
 	const annotatedVideoRef = useRef(null);
 
-	const API_START = "http://localhost:8000/predict_video_annotated";
-	const API_STATUS = id => `http://localhost:8000/status/${id}`;
+	const API_START = `${API_BASE}/predict_video_annotated`;
+	const API_STATUS = id => `${API_BASE}/status/${id}`;
 
 	useEffect(() => {
 		return () => {
@@ -267,7 +268,7 @@ function VideoDetector() {
 
 						{error && (
 							<div className="mt-2 rounded-2xl border border-rose-100 bg-rose-50/80 px-4 py-3 text-sm text-rose-700 flex items-start gap-2">
-								<span className="mt-0.5">⚠️</span>
+								<span className="mt-0.5"></span>
 								<div>
 									<p className="font-semibold">Error</p>
 									<p className="text-xs sm:text-sm">{error}</p>
@@ -401,7 +402,7 @@ function VideoDetector() {
 									setPublishing(true);
 									setError("");
 									try {
-										const res = await fetch("http://localhost:8000/posts", {
+										const res = await fetch(`${API_BASE}/posts`, {
 											method: "POST",
 											headers: {
 												"Content-Type": "application/json",

@@ -1,5 +1,6 @@
 import {useEffect, useState} from "react";
 import {useAuth} from "../auth/AuthContext";
+import { API_BASE } from "../lib/api";
 
 function FeedPage() {
 	const {token} = useAuth();
@@ -14,7 +15,7 @@ function FeedPage() {
 		setLoading(true);
 		setError("");
 		try {
-			const res = await fetch(`http://localhost:8000/posts/public?limit=${limit}&offset=${newOffset}`, {
+			const res = await fetch(`${API_BASE}/posts/public?limit=${limit}&offset=${newOffset}`, {
 				headers: {Authorization: `Bearer ${token}`}
 			});
 			const data = await res.json();
@@ -43,7 +44,7 @@ function FeedPage() {
 				</button>
 			</div>
 
-			{error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3">⚠️ {error}</div>}
+			{error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3"> {error}</div>}
 
 			{items.length === 0 && !loading && <p className="text-sm text-slate-600">Encara no hi ha publicacions.</p>}
 

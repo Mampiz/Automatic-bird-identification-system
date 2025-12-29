@@ -3,9 +3,10 @@ import {BrowserRouter, Link, Route, Routes, useLocation} from "react-router-dom"
 import AuthGate from "./components/AuthGate";
 import FeedPage from "./components/FeedPage";
 import ImageDetector from "./components/ImageDetector";
+import StreamDetector from "./components/StreamDetector";
+import {LayoutTextFlip} from "./components/ui/layout-text-flip";
 import UserBadge from "./components/UserBadge";
 import VideoDetector from "./components/VideoDetector";
-import {LayoutTextFlip} from "./components/ui/layout-text-flip";
 
 function Home({tab, setTab}) {
 	return <AuthGate>{tab === "image" ? <ImageDetector /> : <VideoDetector />}</AuthGate>;
@@ -15,11 +16,15 @@ function AppShell() {
 	const location = useLocation();
 	const [tab, setTab] = useState("image");
 
+	const isStreamPage = location.pathname === "/stream";
+
 	return (
 		<div className="min-h-screen bg-[url('https://images.unsplash.com/photo-1502252430442-aac78f397426?fm=jpg&q=60&w=3000&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxzZWFyY2h8Nnx8NGslMjBmb3Jlc3R8ZW58MHx8MHx8fDA%3D')] bg-cover bg-center text-slate-800">
-			<div className="max-w-5xl mx-auto px-4 py-10 lg:py-16">
-				<header className="relative flex flex-col items-center gap-4 mb-8">
-					<div className="w-full flex justify-end">
+			{/* Wrapper: normal pages centered / stream full width */}
+			<div className={isStreamPage ? "w-full px-0 py-0" : "max-w-5xl mx-auto px-4 py-10 lg:py-16"}>
+				{/* Header: for stream keep it smaller */}
+				<header className={isStreamPage ? "relative flex flex-col items-center gap-3 px-4 pt-6 pb-4" : "relative flex flex-col items-center gap-4 mb-8"}>
+					<div className={isStreamPage ? "w-full flex justify-end" : "w-full flex justify-end"}>
 						<UserBadge />
 					</div>
 
@@ -27,16 +32,18 @@ function AppShell() {
 						Detector d'aus <span className="inline-block align-middle pb-5">🐦</span>
 					</h1>
 
-					<LayoutTextFlip text="Quina serà l'au que estàs buscant? Serà un/una..." words={["Abellerol comú", "Cames llargues", "Estornell negre", "Merla blava", "Pardal xarrec", "Picot verd ibèric", "Xatrac bec-llarg", "Cadernera europea", "Roquerol", "Tallarol de casquet", "Mallerenga petita", "Gavina capnegra americana"]} className="mt-3 text-3xl sm:text-4xl lg:text-3xl font-bold text-indigo-600 text-center tracking-tight" />
 
-					<p className="text-green-500 font-bold text-center max-w-xl">Josep Mampel Marques · TFG</p>
-
-					<div className="flex items-center gap-2">
+					<div className="flex items-center gap-2 flex-wrap justify-center">
 						<Link to="/" className={`px-4 py-2 rounded-full text-xs sm:text-sm bg-white/80 border border-white/60 hover:bg-white ${location.pathname === "/" ? "font-bold" : ""}`}>
 							Detector
 						</Link>
+
 						<Link to="/feed" className={`px-4 py-2 rounded-full text-xs sm:text-sm bg-white/80 border border-white/60 hover:bg-white ${location.pathname === "/feed" ? "font-bold" : ""}`}>
 							Feed
+						</Link>
+
+						<Link to="/stream" className={`px-4 py-2 rounded-full text-xs sm:text-sm bg-white/80 border border-white/60 hover:bg-white ${location.pathname === "/stream" ? "font-bold" : ""}`}>
+							Directe
 						</Link>
 					</div>
 
@@ -54,6 +61,7 @@ function AppShell() {
 
 				<Routes>
 					<Route path="/" element={<Home tab={tab} setTab={setTab} />} />
+
 					<Route
 						path="/feed"
 						element={
@@ -62,7 +70,18 @@ function AppShell() {
 							</AuthGate>
 						}
 					/>
+
+					<Route
+						path="/stream"
+						element={
+							<AuthGate>
+								<StreamDetector />
+							</AuthGate>
+						}
+					/>
 				</Routes>
+
+				{!isStreamPage && <div className="h-10" />}
 			</div>
 		</div>
 	);

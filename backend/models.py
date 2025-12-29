@@ -26,7 +26,6 @@ class Analysis(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), index=True, nullable=False)
 
-    # hash sha256 del vídeo
     video_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
 
     mp4_path: Mapped[str] = mapped_column(String(1024), nullable=False)
