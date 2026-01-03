@@ -1,0 +1,8 @@
+{
+	"rewrites": [
+		{
+			"source": "/api/(.*)",
+			"destination": "http://birds-alb-546849328.us-east-1.elb.amazonaws.com/$1"
+		}
+	]
+}
