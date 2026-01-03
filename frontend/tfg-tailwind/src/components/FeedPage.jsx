@@ -1,6 +1,12 @@
 import {useEffect, useState} from "react";
 import {useAuth} from "../auth/AuthContext";
-import { API_BASE } from "../lib/api";
+import {API_BASE} from "../lib/api";
+
+function absApiUrl(maybeUrl) {
+	if (!maybeUrl) return "";
+	if (maybeUrl.startsWith("http://") || maybeUrl.startsWith("https://")) return maybeUrl;
+	return `${API_BASE}${maybeUrl.startsWith("/") ? "" : "/"}${maybeUrl}`;
+}
 
 function FeedPage() {
 	const {token} = useAuth();
@@ -15,25 +21,44 @@ function FeedPage() {
 		setLoading(true);
 		setError("");
 		try {
-			const res = await fetch(`${API_BASE}/posts/public?limit=${limit}&offset=${newOffset}`, {
-				headers: {Authorization: `Bearer ${token}`}
-			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.detail || "Error cargando feed");
-			if (newOffset === 0) setItems(data.items);
-			else setItems(prev => [...prev, ...data.items]);
+			const url = `${API_BASE}/posts/public?limit=${limit}&offset=${newOffset}`;
+
+	
+			const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+
+			const res = await fetch(url, {headers});
+
+			const text = await res.text();
+			let data = null;
+			try {
+				data = text ? JSON.parse(text) : null;
+			} catch {
+				
+			}
+
+			if (!res.ok) {
+				throw new Error((data && data.detail) || text || "Error cargando feed");
+			}
+
+			const nextItems = (data?.items || []).map(p => ({
+				...p,
+				public_video_url: absApiUrl(p.public_video_url) // 🔥 clave
+			}));
+
+			if (newOffset === 0) setItems(nextItems);
+			else setItems(prev => [...prev, ...nextItems]);
+
 			setOffset(newOffset);
 		} catch (e) {
-			setError(e.message);
+			setError(e?.message || "Error cargando feed");
 		} finally {
 			setLoading(false);
 		}
 	};
 
 	useEffect(() => {
-		if (!token) return;
 		load(0);
-	}, [token]);
+	}, []);
 
 	return (
 		<main className="bg-white/80 backdrop-blur-xl border border-white/70 shadow-xl rounded-3xl p-6 sm:p-8 lg:p-10 flex flex-col gap-6 w-full mx-auto">
@@ -44,7 +69,7 @@ function FeedPage() {
 				</button>
 			</div>
 
-			{error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3"> {error}</div>}
+			{error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3">{error}</div>}
 
 			{items.length === 0 && !loading && <p className="text-sm text-slate-600">Encara no hi ha publicacions.</p>}
 
@@ -60,11 +85,12 @@ function FeedPage() {
 									</p>
 								</div>
 							</div>
+
 							{post.description && <p className="mt-2 text-sm text-slate-700">{post.description}</p>}
 						</div>
 
 						<div className="bg-black/5">
-							<video src={post.public_video_url} controls className="w-full h-auto" />
+							<video src={post.public_video_url} controls preload="metadata" playsInline className="w-full h-auto" />
 						</div>
 					</article>
 				))}
