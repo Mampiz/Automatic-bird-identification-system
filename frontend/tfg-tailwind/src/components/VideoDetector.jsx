@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {useAuth} from "../auth/AuthContext";
-import { API_BASE } from "../lib/api";
+import {API_BASE} from "../lib/api";
 
 function VideoDetector() {
 	const {token} = useAuth();
@@ -37,6 +37,12 @@ function VideoDetector() {
 
 	const API_START = `${API_BASE}/predict_video_annotated`;
 	const API_STATUS = id => `${API_BASE}/status/${id}`;
+
+	const absApiUrl = maybeUrl => {
+		if (!maybeUrl) return null;
+		if (maybeUrl.startsWith("http://") || maybeUrl.startsWith("https://")) return maybeUrl;
+		return `${API_BASE}${maybeUrl.startsWith("/") ? "" : "/"}${maybeUrl}`;
+	};
 
 	useEffect(() => {
 		return () => {
@@ -163,9 +169,10 @@ function VideoDetector() {
 					setLoading(false);
 					clearInterval(interval);
 
-					// Descargar MP4 protegido como blob (porque <video src> no manda Authorization)
 					if (st.result?.video_url) {
-						const vres = await fetch(st.result.video_url, {
+						const videoUrl = absApiUrl(st.result.video_url);
+
+						const vres = await fetch(videoUrl, {
 							headers: {Authorization: `Bearer ${token}`}
 						});
 						if (!vres.ok) {
@@ -200,7 +207,7 @@ function VideoDetector() {
 			alive = false;
 			clearInterval(interval);
 		};
-	}, [jobId, token]);
+	}, [jobId, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const totalDuration = result?.video_info?.duration_seconds ?? null;
 
@@ -331,15 +338,16 @@ function VideoDetector() {
 											type="button"
 											onClick={async () => {
 												try {
-													const res = await fetch(result.video_url, {headers: {Authorization: `Bearer ${token}`}});
+													const url = absApiUrl(result.video_url);
+													const res = await fetch(url, {headers: {Authorization: `Bearer ${token}`}});
 													if (!res.ok) throw new Error("No se pudo descargar.");
 													const blob = await res.blob();
-													const url = URL.createObjectURL(blob);
+													const blobUrl = URL.createObjectURL(blob);
 													const a = document.createElement("a");
-													a.href = url;
+													a.href = blobUrl;
 													a.download = "video_annotated.mp4";
 													a.click();
-													URL.revokeObjectURL(url);
+													URL.revokeObjectURL(blobUrl);
 												} catch (e) {
 													setError(e.message);
 												}

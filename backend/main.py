@@ -505,7 +505,7 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
                 enriched["top_species"] = top_for_segment(seg)
                 segments_enriched.append(enriched)
 
-            video_url = f"{PUBLIC_BASE_URL}/videos/{job_id}.mp4"
+            video_url = f"/videos/{job_id}.mp4"
             result = {
                 "video_id": job_id,
                 "video_url": video_url,
@@ -614,7 +614,7 @@ def create_post(
         "title": post.title,
         "description": post.description,
         "created_at": post.created_at.isoformat(),
-        "public_video_url": f"{PUBLIC_BASE_URL}/public/posts/{post.id}.mp4",
+        "public_video_url": f"/public/posts/{post.id}.mp4",
     }
 
 
@@ -645,7 +645,7 @@ def list_public_posts(
             "description": p.description,
             "created_at": p.created_at.isoformat(),
             "author": author.email if author else "unknown",
-            "public_video_url": f"{PUBLIC_BASE_URL}/public/posts/{p.id}.mp4",
+            "public_video_url": f"/public/posts/{p.id}.mp4",
         })
 
     return {"items": out, "limit": limit, "offset": offset}
