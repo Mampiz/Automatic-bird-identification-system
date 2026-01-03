@@ -39,12 +39,22 @@ MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "1"))
 job_sema = threading.Semaphore(MAX_CONCURRENT_JOBS)
 
 
-# ---------------- DB init ----------------
-Base.metadata.create_all(bind=engine)
-
-
 # ---------------- FastAPI + CORS ----------------
 app = FastAPI()
+_db_init_lock = threading.Lock()
+_db_initialized = False
+
+@app.on_event("startup")
+def _init_db_once():
+    global _db_initialized
+    if _db_initialized:
+        return
+    with _db_init_lock:
+        if _db_initialized:
+            return
+        Base.metadata.create_all(bind=engine)
+        _db_initialized = True
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -708,52 +718,48 @@ async def predict_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/predict_frame")
-async def predict_frame(
+@app.post("/predict_frame_fast")
+async def predict_frame_fast(
     file: UploadFile = File(...),
-    conf: confloat(ge=0.0, le=1.0) = Form(DEFAULT_MIN_CONF),
+    conf: confloat(ge=0.0, le=1.0) = DEFAULT_MIN_CONF,
     current: User = Depends(get_current_user),
 ):
-    try:
-        data = await file.read()
-        if not data:
-            raise HTTPException(status_code=400, detail="Imagen vacía")
+    data = await file.read()
+    if not data:
+        return {"ok": True, "detections": []}
 
-        arr = np.frombuffer(data, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise HTTPException(status_code=400, detail="No se pudo decodificar la imagen")
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return {"ok": True, "detections": []}
 
-        h, w = img.shape[:2]
-        results = model.predict(source=img, conf=float(conf), imgsz=640, verbose=False)
-        r = results[0]
-        boxes = r.boxes
-        names = r.names
+    h, w = img.shape[:2]
 
-        dets = []
-        if boxes is not None and len(boxes) > 0:
-            for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                cls_id = int(box.cls[0])
-                c = float(box.conf[0])
-                cls_name = names.get(cls_id, f"class_{cls_id}")
+    results = model.predict(
+        source=img,
+        conf=float(conf),
+        imgsz=640,
+        verbose=False,
+        device="cpu"  # explícito (mejor control)
+    )
 
-                bbox_norm, bbox_px = _to_bbox_norm_xyxy(x1, y1, x2, y2, w, h)
-                dets.append({
-                    "class": cls_name,
-                    "confidence": float(c),
-                    "bbox": bbox_px,
-                    "bbox_norm": bbox_norm,
-                })
+    r = results[0]
+    dets = []
 
-        return {
-            "ok": True,
-            "num_detections": len(dets),
-            "image_size": {"width": int(w), "height": int(h)},
-            "detections": dets
-        }
+    if r.boxes is not None:
+        for box in r.boxes:
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            cls_id = int(box.cls[0])
+            c = float(box.conf[0])
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            dets.append({
+                "class": r.names.get(cls_id, str(cls_id)),
+                "confidence": c,
+                "bbox_norm": [
+                    max(0.0, min(x1 / w, 1.0)),
+                    max(0.0, min(y1 / h, 1.0)),
+                    max(0.0, min(x2 / w, 1.0)),
+                    max(0.0, min(y2 / h, 1.0)),
+                ],
+            })
+
+    return {"ok": True, "detections": dets}
