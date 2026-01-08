@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Detector d’aus</title>
+
+  <!-- Fondo -->
+  <rect width="64" height="64" rx="14" fill="#0f172a"></rect>
+
+  <!-- Ocell estilitzat -->
+  <path d="M16 36c10-8 22-8 32-4-6 0-10 4-12 8-2 4-6 8-12 8-4 0-6-4-8-12z" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+
+  <!-- Ull -->
+  <circle cx="38" cy="28" r="1.8" fill="#22c55e"></circle>
+</svg>
