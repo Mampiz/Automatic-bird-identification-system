@@ -1,21 +1,60 @@
-# Backend del Detector d’Aus — FastAPI + YOLOv12
+# Backend – FastAPI
 
-Aquest backend implementa una API en **FastAPI** capaç d’analitzar imatges i vídeos per detectar aus mitjançant un model **YOLOv12m** entrenat específicament.
+- Python 3
+- FastAPI
+- PostgreSQL
+- Docker
+- Docker Compose
 
-## Requisits
-- Python 3.10 o superior
-- pip i virtualenv recomanats
-- ffmpeg (opcional però recomanat)
+---
 
-## Instal·lació
+## Instalación
+
+Antes de levantar los contenedores, es necesario instalar las dependencias del proyecto.
+
+Desde /backend del proyecto:
+
 ```bash
-git clone <repo>
-cd backend
-python3 -m venv venv
-source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Execució
+---
+
+## Levantar el backend
+
+Una vez instaladas las dependencias, levanta el backend y la base de datos ejecutando desde la raiz del proyecto este comando:
+
 ```bash
-uvicorn main:app --reload
+docker compose up --build
+```
+
+Este comando levanta:
+
+- El backend en FastAPI
+- La base de datos PostgreSQL
+
+---
+
+## Acceso a la aplicación
+
+- Backend:
+  http://localhost:8000
+
+- Documentación de la API (Swagger):
+  http://localhost:8000/docs
+
+---
+
+## Detener los servicios
+
+Para detener los contenedores:
+
+```bash
+docker compose down
+```
+
+Para detenerlos y eliminar los volúmenes:
+
+```bash
+docker compose down -v
+```

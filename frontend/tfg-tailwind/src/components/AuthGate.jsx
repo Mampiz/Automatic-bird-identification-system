@@ -206,7 +206,7 @@ export default function AuthGate({children}) {
 										inputMode="email"
 										autoComplete="email"
 										placeholder="tuemail@gmail.com"
-										className="w-full rounded-2xl border border-slate-200/80 bg-white/90 pl-11 pr-4 py-3 text-sm outline-none
+										className="w-full rounded-2xl border border-slate-200/80 bg-white/90 pl-11 pr-4 py-3 text-black text-sm outline-none
                       focus:ring-2 focus:ring-indigo-200 focus:border-indigo-200 transition
                       placeholder:text-slate-400"
 									/>
@@ -228,7 +228,7 @@ export default function AuthGate({children}) {
 											type={showPassword ? "text" : "password"}
 											autoComplete={mode === "login" ? "current-password" : "new-password"}
 											placeholder={mode === "register" ? "mínim 6 caràcters" : "la teva contrasenya"}
-											className="w-full rounded-2xl border border-slate-200/80 bg-white/90 pl-11 pr-4 py-3 text-sm outline-none
+											className="w-full rounded-2xl border border-slate-200/80 bg-white/90 pl-11 pr-4 py-3 text-black  text-sm outline-none
                         focus:ring-2 focus:ring-indigo-200 focus:border-indigo-200 transition
                         placeholder:text-slate-400"
 										/>
