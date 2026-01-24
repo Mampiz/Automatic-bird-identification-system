@@ -66,7 +66,7 @@ app.add_middleware(
 
 
 # ---------------- YOLO model ----------------
-MODEL_PATH = os.getenv("MODEL_PATH", "best.pt")
+MODEL_PATH = os.getenv("MODEL_PATH", "bestgen.pt")
 log.info("Cargando modelo YOLO...")
 model = YOLO(MODEL_PATH)
 log.info("Modelo YOLO cargado: %s", MODEL_PATH)
