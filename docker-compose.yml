@@ -1,33 +1,45 @@
 services:
-  db:
-    image: postgres:16
-    environment:
-      POSTGRES_DB: birdsdb
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+    db:
+        image: postgres:16
+        environment:
+            POSTGRES_DB: birdsdb
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: postgres
+        ports:
+            - "5432:5432"
+        volumes:
+            - pgdata:/var/lib/postgresql/data
 
-  backend:
-    build: ./backend
-    environment:
-      ENV: dev
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/birdsdb
-      JWT_SECRET: dev_insecure_change_me
-      JWT_ALG: HS256
-      JWT_EXPIRE_MINUTES: "120"
-      PUBLIC_BASE_URL: http://localhost:8000
-      FRONTEND_ORIGINS: http://localhost:5173
-      MAX_CONCURRENT_JOBS: "1"
-      MODEL_PATH: bestgen.pt
-    ports:
-      - "8000:8000"
-    depends_on:
-      - db
-    volumes:
-      - ./backend/outputs:/app/outputs
+    nginx-rtmp:
+        build: ./nginx-rtmp
+        ports:
+            - "1935:1935"
+            - "8080:8080"
+        volumes:
+            - ./hls:/hls
+
+    backend:
+        build: ./backend
+        environment:
+            ENV: dev
+            DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/birdsdb
+            JWT_SECRET: dev_insecure_change_me
+            JWT_ALG: HS256
+            JWT_EXPIRE_MINUTES: "120"
+            PUBLIC_BASE_URL: http://localhost:8000
+            FRONTEND_ORIGINS: http://localhost:5173
+            MAX_CONCURRENT_JOBS: "1"
+            MODEL_PATH: bestgen.pt
+            HLS_DIR: /hls
+            HLS_PUBLIC_BASE: ""
+        ports:
+            - "8000:8000"
+        depends_on:
+            - db
+            - nginx-rtmp
+        volumes:
+            - ./backend/outputs:/app/outputs
+            - ./hls:/hls:ro
 
 volumes:
-  pgdata:
+    pgdata:

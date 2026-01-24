@@ -1,10 +1,10 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import conint, confloat
 from sqlalchemy.orm import Session
 import numpy as np
-from typing import Dict, Optional
+from fastapi import Request
 
 import os
 import time
@@ -25,12 +25,10 @@ from models import User, Analysis, Post
 from auth import hash_password, verify_password, create_access_token, get_current_user
 
 
-# ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("birds-backend")
 
 
-# ---------------- Config (ENV) ----------------
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
 
 FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173")
@@ -40,10 +38,10 @@ MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "1"))
 job_sema = threading.Semaphore(MAX_CONCURRENT_JOBS)
 
 
-# ---------------- FastAPI + CORS ----------------
 app = FastAPI()
 _db_init_lock = threading.Lock()
 _db_initialized = False
+
 
 @app.on_event("startup")
 def _init_db_once():
@@ -66,7 +64,6 @@ app.add_middleware(
 )
 
 
-# ---------------- YOLO model ----------------
 MODEL_PATH = os.getenv("MODEL_PATH", "bestgen.pt")
 log.info("Cargando modelo YOLO...")
 model = YOLO(MODEL_PATH)
@@ -75,7 +72,6 @@ log.info("Modelo YOLO cargado: %s", MODEL_PATH)
 DEFAULT_MIN_CONF = 0.25
 DEFAULT_FRAME_STRIDE = 5
 
-# Límites vídeo
 MAX_UPLOAD_MB = 300
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 MAX_DURATION_SECONDS = 15 * 60
@@ -83,18 +79,16 @@ MAX_OUTPUT_WIDTH = 1280
 MAX_OUTPUT_HEIGHT = 720
 
 SEGMENT_GAP_SECONDS = 1.0
-TTL_MULT = 2  
+TTL_MULT = 2
 
-# Outputs
 OUTPUT_DIR = os.path.abspath("./outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-OUTPUT_TTL_SECONDS = 24 * 60 * 60  # 24h
+OUTPUT_TTL_SECONDS = 24 * 60 * 60
 
 jobs = {}
 jobs_lock = threading.Lock()
 
 
-# ---------------- Helpers ----------------
 def _cleanup_old_outputs():
     now = time.time()
     removed = 0
@@ -186,7 +180,6 @@ def _to_bbox_norm_xyxy(x1, y1, x2, y2, w, h):
     return [x1c / w, y1c / h, x2c / w, y2c / h], [x1c, y1c, x2c, y2c]
 
 
-# ---------------- Auth endpoints ----------------
 @app.post("/auth/register")
 def register(email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     email = email.strip().lower()
@@ -220,7 +213,6 @@ def me(current: User = Depends(get_current_user)):
     return {"id": current.id, "email": current.email}
 
 
-# ---------------- Video endpoints ----------------
 @app.get("/videos/{video_id}.mp4")
 def get_video(video_id: str, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     _cleanup_old_outputs()
@@ -574,7 +566,6 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
                     pass
 
 
-# ---------------- Posts ----------------
 @app.post("/posts")
 def create_post(
     payload: dict = Body(...),
@@ -663,7 +654,6 @@ def get_public_post_video(post_id: str, db: Session = Depends(get_db)):
     return FileResponse(path, media_type="video/mp4", filename="post.mp4")
 
 
-# ---------------- Image + Frame (unified format) ----------------
 @app.post("/predict_image")
 async def predict_image(
     file: UploadFile = File(...),
@@ -762,106 +752,41 @@ async def predict_frame_fast(
     return {"ok": True, "detections": dets}
 
 
-CAM_ACTIVE_TTL_SECONDS = int(os.getenv("CAM_ACTIVE_TTL_SECONDS", "10"))
-CAM_STREAM_FPS = float(os.getenv("CAM_STREAM_FPS", "5"))
 
-class CamState:
-    def __init__(self):
-        self.last_frame: Optional[bytes] = None
-        self.last_ts: float = 0.0
-        self.meta: dict = {}
-        self.lock = threading.Lock()
+HLS_DIR = os.getenv("HLS_DIR", "/hls")
+HLS_PUBLIC_BASE = os.getenv("HLS_PUBLIC_BASE", "").strip().rstrip("/")
 
-cams: Dict[str, CamState] = {}
+def _guess_hls_base(req: Request) -> str:
+    if HLS_PUBLIC_BASE:
+        return HLS_PUBLIC_BASE
+    host = req.headers.get("host", "localhost:8000").split(":")[0]
+    return f"http://{host}:8080/hls"
 
+@app.get("/live/streams")
+def list_live_streams(req: Request):
+    try:
+        base = _guess_hls_base(req)
+        items = []
+        if os.path.isdir(HLS_DIR):
+            for name in os.listdir(HLS_DIR):
+                if name.endswith(".m3u8"):
+                    stream_id = name[:-5]
+                    items.append({"id": stream_id, "m3u8_url": f"{base}/{name}"})
+        items.sort(key=lambda x: x["id"])
+        return {"items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/cams/{cam_id}/frame")
-async def push_cam_frame(
-    cam_id: str,
-    frame: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-):
-    if frame.content_type not in ("image/jpeg", "image/jpg"):
-        raise HTTPException(status_code=415, detail="Only JPEG frames are supported")
+@app.get("/live/streams/{stream_id}")
+def get_live_stream(stream_id: str, req: Request):
+    safe = "".join(ch for ch in stream_id if ch.isalnum() or ch in ("-", "_"))
+    if not safe:
+        raise HTTPException(status_code=400, detail="stream_id inválido")
 
-    data = await frame.read()
-    if not data or len(data) < 10:
-        raise HTTPException(status_code=400, detail="Empty frame")
+    m3u8_name = f"{safe}.m3u8"
+    path = os.path.join(HLS_DIR, m3u8_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="stream no encontrado")
 
-    st = cams.get(cam_id)
-    if st is None:
-        st = CamState()
-        cams[cam_id] = st
-
-    with st.lock:
-        st.last_frame = data
-        st.last_ts = time.time()
-        st.meta = {"cam_id": cam_id, "by_user": str(current_user.id), "updated_at": st.last_ts}
-
-    return {"ok": True, "cam_id": cam_id, "ts": st.last_ts}
-
-
-@app.get("/cams")
-def list_cams(current_user: User = Depends(get_current_user)):
-    now = time.time()
-    out = []
-    for cam_id, st in cams.items():
-        if st.last_frame is None:
-            continue
-        if (now - st.last_ts) <= CAM_ACTIVE_TTL_SECONDS:
-            out.append(
-                {
-                    "cam_id": cam_id,
-                    "updated_at": st.last_ts,
-                    "last_seen_sec": round(now - st.last_ts, 2),
-                }
-            )
-    out.sort(key=lambda x: x["updated_at"], reverse=True)
-    return {"active_ttl_sec": CAM_ACTIVE_TTL_SECONDS, "cams": out}
-
-
-@app.get("/cams/{cam_id}/snapshot.jpg")
-def cam_snapshot(cam_id: str, current_user: User = Depends(get_current_user)):
-    st = cams.get(cam_id)
-    if not st or st.last_frame is None:
-        raise HTTPException(status_code=404, detail="Cam not found or no frame yet")
-    return Response(content=st.last_frame, media_type="image/jpeg")
-
-
-@app.get("/cams/{cam_id}/mjpeg")
-def cam_mjpeg(cam_id: str, current_user: User = Depends(get_current_user)):
-    st = cams.get(cam_id)
-    if not st:
-        raise HTTPException(status_code=404, detail="Cam not found")
-
-    boundary = "frame"
-    sleep_s = max(0.02, 1.0 / max(CAM_STREAM_FPS, 0.1))
-
-    def gen():
-        while True:
-            time.sleep(sleep_s)
-
-            with st.lock:
-                frame_bytes = st.last_frame
-                last_ts = st.last_ts
-
-            if frame_bytes is None:
-                continue
-
-            if (time.time() - last_ts) > CAM_ACTIVE_TTL_SECONDS:
-                break
-
-            header = (
-                f"--{boundary}\r\n"
-                "Content-Type: image/jpeg\r\n"
-                f"Content-Length: {len(frame_bytes)}\r\n\r\n"
-            ).encode("utf-8")
-            yield header + frame_bytes + b"\r\n"
-
-        yield f"--{boundary}--\r\n".encode("utf-8")
-
-    return StreamingResponse(
-        gen(),
-        media_type=f"multipart/x-mixed-replace; boundary={boundary}",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
+    base = _guess_hls_base(req)
+    return {"id": safe, "m3u8_url": f"{base}/{m3u8_name}"}
