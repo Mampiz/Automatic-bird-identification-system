@@ -112,8 +112,20 @@ export default function LiveCamsPage() {
 
 	useEffect(() => {
 		const v = videoRef.current;
+		if (!v) return;
+
+		const cleanupVideo = () => {
+			try {
+				v.pause();
+				v.removeAttribute("src");
+				v.load();
+			} catch {}
+		};
 
 		if (hlsRef.current) {
+			try {
+				hlsRef.current.stopLoad();
+			} catch {}
 			try {
 				hlsRef.current.destroy();
 			} catch {}
@@ -123,7 +135,10 @@ export default function LiveCamsPage() {
 		setPlayState("idle");
 		setPlayErr("");
 
-		if (!focus || !v) return;
+		if (!focus) {
+			cleanupVideo();
+			return;
+		}
 
 		setDetections([]);
 		setStats({lastMs: 0, fps: 0, dets: 0});
@@ -132,26 +147,47 @@ export default function LiveCamsPage() {
 
 		const src = focus.m3u8_url;
 
-		const onPlaying = () => setPlayState("playing");
+		const onPlaying = () => {
+			setPlayState("playing");
+			setPlayErr("");
+		};
+
+		const onCanPlay = () => {
+			setPlayState(s => (s === "loading" ? "ready" : s));
+		};
+
 		const onError = () => {
-			setPlayState("error");
-			setPlayErr("Error reproduint vídeo (revisa consola/network).");
+			setPlayState(s => (s === "playing" ? s : "loading"));
 		};
 
 		v.addEventListener("playing", onPlaying);
+		v.addEventListener("canplay", onCanPlay);
 		v.addEventListener("error", onError);
+
+		const tryPlay = () => {
+			setPlayState("ready");
+			setTimeout(() => {
+				v.play()
+					.then(() => {
+						setPlayState("playing");
+						setPlayErr("");
+					})
+					.catch(() => {
+						setPlayState("ready");
+						setPlayErr("Autoplay bloquejat. Prem Play manualment.");
+					});
+			}, delaySec * 1000);
+		};
 
 		if (v.canPlayType("application/vnd.apple.mpegurl")) {
 			v.src = src;
-			setTimeout(() => v.play().catch(() => {}), delaySec * 1000);
+			tryPlay();
+
 			return () => {
 				v.removeEventListener("playing", onPlaying);
+				v.removeEventListener("canplay", onCanPlay);
 				v.removeEventListener("error", onError);
-				try {
-					v.pause();
-					v.removeAttribute("src");
-					v.load();
-				} catch {}
+				cleanupVideo();
 			};
 		}
 
@@ -169,34 +205,68 @@ export default function LiveCamsPage() {
 
 			hlsRef.current = hls;
 
+			let triedRecoverMedia = false;
+			let triedRecoverLevel = false;
+
 			hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-				console.log("HLS media attached");
+				hls.loadSource(src);
+				hls.startLoad();
 			});
 
-			hls.on(Hls.Events.MANIFEST_LOADED, (_, data) => {
-				console.log("MANIFEST_LOADED", data);
-			});
-
-			hls.on(Hls.Events.LEVEL_LOADED, (_, data) => {
-				console.log("LEVEL_LOADED", data);
-			});
-
-			hls.on(Hls.Events.FRAG_LOADED, (_, data) => {
-				console.log("FRAG_LOADED", data.frag?.url);
+			hls.on(Hls.Events.MANIFEST_PARSED, () => {
+				tryPlay();
 			});
 
 			hls.on(Hls.Events.ERROR, (_, data) => {
-				console.error("HLS ERROR", data);
+				const fatal = !!data?.fatal;
+				const type = data?.type || "";
+				const details = data?.details || "";
+
+				if (!fatal) return;
+
+				if (type === Hls.ErrorTypes.NETWORK_ERROR) {
+					setPlayState("loading");
+					setPlayErr("Reintentant carregar stream...");
+					setTimeout(() => {
+						try {
+							hls.startLoad();
+						} catch {}
+					}, 600);
+					return;
+				}
+
+				if (type === Hls.ErrorTypes.MEDIA_ERROR) {
+					if (!triedRecoverMedia) {
+						triedRecoverMedia = true;
+						setPlayState("loading");
+						setPlayErr("Recuperant media...");
+						setTimeout(() => {
+							try {
+								hls.recoverMediaError();
+							} catch {}
+						}, 300);
+						return;
+					}
+
+					if (!triedRecoverLevel) {
+						triedRecoverLevel = true;
+						setPlayState("loading");
+						setPlayErr("Recuperant codec...");
+						setTimeout(() => {
+							try {
+								hls.swapAudioCodec();
+								hls.recoverMediaError();
+							} catch {}
+						}, 300);
+						return;
+					}
+				}
+
 				setPlayState("error");
-				setPlayErr(`${data?.type || "HLS"}: ${data?.details || "unknown"}`);
+				setPlayErr(`${type}: ${details || "fatal"}`);
 			});
 
-			hls.loadSource(src);
 			hls.attachMedia(v);
-
-			hls.on(Hls.Events.MANIFEST_PARSED, () => {
-				setTimeout(() => v.play().catch(() => {}), delaySec * 1000);
-			});
 		} else {
 			setPlayState("error");
 			setPlayErr("HLS no suportat en aquest navegador.");
@@ -204,19 +274,19 @@ export default function LiveCamsPage() {
 
 		return () => {
 			v.removeEventListener("playing", onPlaying);
+			v.removeEventListener("canplay", onCanPlay);
 			v.removeEventListener("error", onError);
 
 			if (hlsRef.current) {
+				try {
+					hlsRef.current.stopLoad();
+				} catch {}
 				try {
 					hlsRef.current.destroy();
 				} catch {}
 				hlsRef.current = null;
 			}
-			try {
-				v.pause();
-				v.removeAttribute("src");
-				v.load();
-			} catch {}
+			cleanupVideo();
 		};
 	}, [focus]);
 
@@ -391,7 +461,7 @@ export default function LiveCamsPage() {
 
 							<div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2">
 								<div className="px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white/80 text-xs sm:text-sm backdrop-blur">
-									{playState === "loading" ? "Carregant stream..." : playState === "playing" ? "Reproduint" : "Error"}
+									{playState === "loading" ? "Carregant stream..." : playState === "playing" ? "Reproduint" : playState === "ready" ? "Llesta (prem Play si cal)" : "Error"}
 									{playErr ? ` · ${playErr}` : ""}
 								</div>
 
