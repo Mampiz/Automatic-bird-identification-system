@@ -1,9 +1,10 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import conint, confloat
 from sqlalchemy.orm import Session
 import numpy as np
+from typing import Dict, Optional
 
 import os
 import time
@@ -176,7 +177,6 @@ def _job_update(job_id: str, **kwargs):
 
 
 def _to_bbox_norm_xyxy(x1, y1, x2, y2, w, h):
-    # clamp
     x1c = max(0.0, min(float(x1), float(w)))
     y1c = max(0.0, min(float(y1), float(h)))
     x2c = max(0.0, min(float(x2), float(w)))
@@ -264,7 +264,7 @@ async def predict_video_annotated(
     _cleanup_old_outputs()
 
     tmp_path, sha256_hex, size_bytes = await _stream_upload_to_tempfile_and_hash(file)
-    job_id = sha256_hex  # cache key global
+    job_id = sha256_hex
 
     cached_json_path = os.path.join(OUTPUT_DIR, f"{job_id}.json")
     cached_mp4_path = os.path.join(OUTPUT_DIR, f"{job_id}.mp4")
@@ -304,7 +304,6 @@ async def predict_video_annotated(
 
         return {"job_id": job_id, "cached": True}
 
-    # Crear job
     with jobs_lock:
         jobs[job_id] = {
             "state": "queued",
@@ -317,7 +316,6 @@ async def predict_video_annotated(
             "updated_at": time.time(),
         }
 
-    # Lanzar thread
     t = threading.Thread(
         target=_process_video_job,
         args=(job_id, tmp_path, float(conf), int(stride), size_bytes, current.id),
@@ -333,7 +331,6 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
     cap = None
     writer = None
 
-    # Limitar concurrencia de jobs pesados
     with job_sema:
         try:
             _job_update(job_id, state="running", progress=0.01, message="Abriendo vídeo")
@@ -739,7 +736,7 @@ async def predict_frame_fast(
         conf=float(conf),
         imgsz=640,
         verbose=False,
-        device="cpu"  # explícito (mejor control)
+        device="cpu"
     )
 
     r = results[0]
@@ -763,3 +760,108 @@ async def predict_frame_fast(
             })
 
     return {"ok": True, "detections": dets}
+
+
+CAM_ACTIVE_TTL_SECONDS = int(os.getenv("CAM_ACTIVE_TTL_SECONDS", "10"))
+CAM_STREAM_FPS = float(os.getenv("CAM_STREAM_FPS", "5"))
+
+class CamState:
+    def __init__(self):
+        self.last_frame: Optional[bytes] = None
+        self.last_ts: float = 0.0
+        self.meta: dict = {}
+        self.lock = threading.Lock()
+
+cams: Dict[str, CamState] = {}
+
+
+@app.post("/cams/{cam_id}/frame")
+async def push_cam_frame(
+    cam_id: str,
+    frame: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    if frame.content_type not in ("image/jpeg", "image/jpg"):
+        raise HTTPException(status_code=415, detail="Only JPEG frames are supported")
+
+    data = await frame.read()
+    if not data or len(data) < 10:
+        raise HTTPException(status_code=400, detail="Empty frame")
+
+    st = cams.get(cam_id)
+    if st is None:
+        st = CamState()
+        cams[cam_id] = st
+
+    with st.lock:
+        st.last_frame = data
+        st.last_ts = time.time()
+        st.meta = {"cam_id": cam_id, "by_user": str(current_user.id), "updated_at": st.last_ts}
+
+    return {"ok": True, "cam_id": cam_id, "ts": st.last_ts}
+
+
+@app.get("/cams")
+def list_cams(current_user: User = Depends(get_current_user)):
+    now = time.time()
+    out = []
+    for cam_id, st in cams.items():
+        if st.last_frame is None:
+            continue
+        if (now - st.last_ts) <= CAM_ACTIVE_TTL_SECONDS:
+            out.append(
+                {
+                    "cam_id": cam_id,
+                    "updated_at": st.last_ts,
+                    "last_seen_sec": round(now - st.last_ts, 2),
+                }
+            )
+    out.sort(key=lambda x: x["updated_at"], reverse=True)
+    return {"active_ttl_sec": CAM_ACTIVE_TTL_SECONDS, "cams": out}
+
+
+@app.get("/cams/{cam_id}/snapshot.jpg")
+def cam_snapshot(cam_id: str, current_user: User = Depends(get_current_user)):
+    st = cams.get(cam_id)
+    if not st or st.last_frame is None:
+        raise HTTPException(status_code=404, detail="Cam not found or no frame yet")
+    return Response(content=st.last_frame, media_type="image/jpeg")
+
+
+@app.get("/cams/{cam_id}/mjpeg")
+def cam_mjpeg(cam_id: str, current_user: User = Depends(get_current_user)):
+    st = cams.get(cam_id)
+    if not st:
+        raise HTTPException(status_code=404, detail="Cam not found")
+
+    boundary = "frame"
+    sleep_s = max(0.02, 1.0 / max(CAM_STREAM_FPS, 0.1))
+
+    def gen():
+        while True:
+            time.sleep(sleep_s)
+
+            with st.lock:
+                frame_bytes = st.last_frame
+                last_ts = st.last_ts
+
+            if frame_bytes is None:
+                continue
+
+            if (time.time() - last_ts) > CAM_ACTIVE_TTL_SECONDS:
+                break
+
+            header = (
+                f"--{boundary}\r\n"
+                "Content-Type: image/jpeg\r\n"
+                f"Content-Length: {len(frame_bytes)}\r\n\r\n"
+            ).encode("utf-8")
+            yield header + frame_bytes + b"\r\n"
+
+        yield f"--{boundary}--\r\n".encode("utf-8")
+
+    return StreamingResponse(
+        gen(),
+        media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )

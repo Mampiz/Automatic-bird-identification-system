@@ -4,6 +4,7 @@ import {useAuth} from "./auth/AuthContext";
 import AuthGate from "./components/AuthGate";
 import FeedPage from "./components/FeedPage";
 import ImageDetector from "./components/ImageDetector";
+import LiveCamsPage from "./components/LiveCamsPage";
 import StreamDetector from "./components/StreamDetector";
 import UserBadge from "./components/UserBadge";
 import VideoDetector from "./components/VideoDetector";
@@ -31,7 +32,7 @@ function AppShell() {
 
 						<div className="text-center">
 							<h1 className="text-4xl sm:text-5xl lg:text-7xl font-extrabold tracking-tight">
-								<span className="text-emerald-400">Detector</span> <span className="text-white">d’aus</span>
+								<span className="text-emerald-400">Identifica</span> <span className="text-white">els teus videos!!</span>
 							</h1>
 							<p className="mt-2 text-sm text-emerald-200/80">Sistema d'identificació d’espècies</p>
 						</div>
@@ -48,6 +49,10 @@ function AppShell() {
 
 								<Link to="/stream" className={`px-4 py-2 rounded-full text-xs sm:text-sm bg-white/90 border border-white/60 text-slate-800 hover:bg-white ${location.pathname === "/stream" ? "font-bold" : ""}`}>
 									Directe
+								</Link>
+
+								<Link to="/live" className={`px-4 py-2 rounded-full text-xs sm:text-sm bg-white/90 border border-white/60 text-slate-800 hover:bg-white ${location.pathname === "/live" ? "font-bold" : ""}`}>
+									Live Cams
 								</Link>
 							</div>
 						)}
@@ -71,6 +76,14 @@ function AppShell() {
 							element={
 								<AuthGate>
 									<FeedPage />
+								</AuthGate>
+							}
+						/>
+						<Route
+							path="/live"
+							element={
+								<AuthGate>
+									<LiveCamsPage />
 								</AuthGate>
 							}
 						/>
