@@ -18,6 +18,7 @@ class User(Base):
 
     analyses = relationship("Analysis", back_populates="user")
     posts = relationship("Post", back_populates="user")
+    jobs = relationship("VideoJob", back_populates="user")
 
 
 class Analysis(Base):
@@ -54,3 +55,28 @@ class Post(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True, nullable=False)
 
     user = relationship("User", back_populates="posts")
+
+
+class VideoJob(Base):
+    __tablename__ = "video_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), index=True, nullable=False)
+
+    state: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    progress: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    message: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    input_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    conf_used: Mapped[float] = mapped_column(Float, nullable=False)
+    stride_used: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="jobs")

@@ -1,4 +1,4 @@
-import Hls from "hls.js";
+import Hls from "hls.js/dist/hls.light.mjs";
 import {useEffect, useMemo, useRef, useState} from "react";
 import {useAuth} from "../auth/AuthContext";
 import {API_BASE} from "../lib/api";
@@ -119,16 +119,22 @@ export default function LiveCamsPage() {
 				v.pause();
 				v.removeAttribute("src");
 				v.load();
-			} catch {}
+			} catch (_err) {
+				void _err;
+			}
 		};
 
 		if (hlsRef.current) {
 			try {
 				hlsRef.current.stopLoad();
-			} catch {}
+			} catch (_err) {
+				void _err;
+			}
 			try {
 				hlsRef.current.destroy();
-			} catch {}
+			} catch (_err) {
+				void _err;
+			}
 			hlsRef.current = null;
 		}
 
@@ -230,7 +236,9 @@ export default function LiveCamsPage() {
 					setTimeout(() => {
 						try {
 							hls.startLoad();
-						} catch {}
+						} catch (_err) {
+							void _err;
+						}
 					}, 600);
 					return;
 				}
@@ -243,7 +251,9 @@ export default function LiveCamsPage() {
 						setTimeout(() => {
 							try {
 								hls.recoverMediaError();
-							} catch {}
+							} catch (_err) {
+								void _err;
+							}
 						}, 300);
 						return;
 					}
@@ -256,7 +266,9 @@ export default function LiveCamsPage() {
 							try {
 								hls.swapAudioCodec();
 								hls.recoverMediaError();
-							} catch {}
+							} catch (_err) {
+								void _err;
+							}
 						}, 300);
 						return;
 					}
@@ -272,23 +284,27 @@ export default function LiveCamsPage() {
 			setPlayErr("HLS no suportat en aquest navegador.");
 		}
 
-		return () => {
-			v.removeEventListener("playing", onPlaying);
-			v.removeEventListener("canplay", onCanPlay);
-			v.removeEventListener("error", onError);
+			return () => {
+				v.removeEventListener("playing", onPlaying);
+				v.removeEventListener("canplay", onCanPlay);
+				v.removeEventListener("error", onError);
 
-			if (hlsRef.current) {
-				try {
-					hlsRef.current.stopLoad();
-				} catch {}
-				try {
-					hlsRef.current.destroy();
-				} catch {}
-				hlsRef.current = null;
-			}
-			cleanupVideo();
-		};
-	}, [focus]);
+				if (hlsRef.current) {
+					try {
+						hlsRef.current.stopLoad();
+					} catch (_err) {
+						void _err;
+					}
+					try {
+						hlsRef.current.destroy();
+					} catch (_err) {
+						void _err;
+					}
+					hlsRef.current = null;
+				}
+				cleanupVideo();
+			};
+		}, [focus]);
 
 	useEffect(() => {
 		const v = videoRef.current;

@@ -2,6 +2,8 @@ import {useEffect, useMemo, useRef, useState} from "react";
 import {useAuth} from "../auth/AuthContext";
 import {API_BASE} from "../lib/api";
 
+const API_PREDICT = `${API_BASE}/predict_frame_fast`;
+
 function hashColor(str) {
 	let h = 0;
 	for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
@@ -34,7 +36,6 @@ function Section({title, children, right}) {
 
 export default function StreamDetector() {
 	const {token} = useAuth();
-	const API_PREDICT = `${API_BASE}/predict_frame_fast`;
 
 	const videoRef = useRef(null);
 	const overlayRef = useRef(null);
@@ -66,7 +67,9 @@ export default function StreamDetector() {
 				streamRef.current.getTracks().forEach(t => t.stop());
 				streamRef.current = null;
 			}
-		} catch {}
+		} catch (_err) {
+			void _err;
+		}
 		setRunning(false);
 		setDetections([]);
 	};

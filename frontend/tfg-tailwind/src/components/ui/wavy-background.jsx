@@ -58,12 +58,14 @@ export const WavyBackground = ({children, className, containerClassName, colors,
 		animationId = requestAnimationFrame(render);
 	};
 
+	/* eslint-disable react-hooks/exhaustive-deps */
 	useEffect(() => {
 		init();
 		return () => {
 			cancelAnimationFrame(animationId);
 		};
 	}, []);
+	/* eslint-enable react-hooks/exhaustive-deps */
 
 	const [isSafari, setIsSafari] = useState(false);
 	useEffect(() => {

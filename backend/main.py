@@ -5,6 +5,9 @@ from pydantic import conint, confloat
 from sqlalchemy.orm import Session
 import numpy as np
 from fastapi import Request
+from datetime import datetime
+from collections import deque
+import asyncio
 
 import os
 import time
@@ -13,7 +16,9 @@ import hashlib
 import tempfile
 import threading
 import subprocess
+import queue
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 from ultralytics import YOLO
@@ -21,7 +26,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from db import Base, engine, get_db, SessionLocal
-from models import User, Analysis, Post
+from models import User, Analysis, Post, VideoJob
 from auth import hash_password, verify_password, create_access_token, get_current_user
 
 
@@ -31,10 +36,30 @@ log = logging.getLogger("birds-backend")
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
 
-FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173")
-FRONTEND_ORIGINS = [o.strip() for o in FRONTEND_ORIGINS.split(",") if o.strip()]
+def _parse_frontend_origins(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return ["http://localhost:5173"]
+    if raw == "*":
+        return ["*"]
 
-MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "1"))
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                out = [str(o).strip() for o in parsed if str(o).strip()]
+                if out:
+                    return out
+        except Exception:
+            pass
+
+    out = [o.strip() for o in raw.split(",") if o.strip()]
+    return out if out else ["http://localhost:5173"]
+
+
+FRONTEND_ORIGINS = _parse_frontend_origins(os.getenv("FRONTEND_ORIGINS", "http://localhost:5173"))
+
+MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))
 job_sema = threading.Semaphore(MAX_CONCURRENT_JOBS)
 
 
@@ -52,6 +77,8 @@ def _init_db_once():
         if _db_initialized:
             return
         Base.metadata.create_all(bind=engine)
+        _ensure_worker_pool()
+        _recover_persisted_jobs()
         _db_initialized = True
 
 
@@ -72,9 +99,9 @@ log.info("Modelo YOLO cargado: %s", MODEL_PATH)
 DEFAULT_MIN_CONF = 0.25
 DEFAULT_FRAME_STRIDE = 5
 
-MAX_UPLOAD_MB = 300
+MAX_UPLOAD_MB = 400
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-MAX_DURATION_SECONDS = 15 * 60
+MAX_DURATION_SECONDS = 20 * 60
 MAX_OUTPUT_WIDTH = 1280
 MAX_OUTPUT_HEIGHT = 720
 
@@ -83,19 +110,70 @@ TTL_MULT = 2
 
 OUTPUT_DIR = os.path.abspath("./outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+UPLOAD_DIR = os.path.join(OUTPUT_DIR, "incoming")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 OUTPUT_TTL_SECONDS = 24 * 60 * 60
+
+JOB_RETENTION_SECONDS = int(os.getenv("JOB_RETENTION_SECONDS", "21600"))
+JOB_MAX_ENTRIES = int(os.getenv("JOB_MAX_ENTRIES", "5000"))
 
 jobs = {}
 jobs_lock = threading.Lock()
+active_jobs = set()
+active_jobs_lock = threading.Lock()
+
+JOB_WORKER_COUNT = max(1, MAX_CONCURRENT_JOBS)
+job_queue = queue.Queue()
+queued_job_ids = set()
+queued_job_ids_lock = threading.Lock()
+_worker_pool_lock = threading.Lock()
+_worker_pool_started = False
+
+MAX_FRAME_UPLOAD_MB = float(os.getenv("MAX_FRAME_UPLOAD_MB", "8"))
+MAX_FRAME_UPLOAD_BYTES = int(MAX_FRAME_UPLOAD_MB * 1024 * 1024)
+FRAME_RATE_LIMIT_WINDOW_SECONDS = max(0.1, float(os.getenv("FRAME_RATE_LIMIT_WINDOW_SECONDS", "1.0")))
+FRAME_RATE_LIMIT_COUNT = max(1, int(os.getenv("FRAME_RATE_LIMIT_COUNT", "20")))
+FRAME_MAX_CONCURRENT_INFER = max(1, int(os.getenv("FRAME_MAX_CONCURRENT_INFER", "2")))
+FRAME_INFER_TIMEOUT_SECONDS = max(1.0, float(os.getenv("FRAME_INFER_TIMEOUT_SECONDS", "12")))
+FFMPEG_TIMEOUT_SECONDS = max(30, int(os.getenv("FFMPEG_TIMEOUT_SECONDS", "1800")))
+
+frame_rate_lock = threading.Lock()
+frame_rate_state: dict[str, deque[float]] = {}
+frame_infer_executor = ThreadPoolExecutor(max_workers=FRAME_MAX_CONCURRENT_INFER, thread_name_prefix="frame-infer")
 
 
-def _cleanup_old_outputs():
+def _build_video_job_id(file_sha256: str, conf: float, stride: int) -> str:
+    conf_norm = f"{float(conf):.4f}"
+    raw = f"{file_sha256}:{conf_norm}:{int(stride)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _pinned_post_paths(db: Session | None) -> set[str]:
+    if db is None:
+        return set()
+
+    keep = set()
+    try:
+        rows = db.query(Post.mp4_path).all()
+        for (p,) in rows:
+            if not p:
+                continue
+            keep.add(os.path.abspath(p))
+    except Exception as e:
+        log.warning("cleanup: no se pudieron cargar rutas publicadas: %s", e)
+    return keep
+
+
+def _cleanup_old_outputs(db: Session | None = None):
     now = time.time()
     removed = 0
+    pinned_paths = _pinned_post_paths(db)
     try:
         for name in os.listdir(OUTPUT_DIR):
             path = os.path.join(OUTPUT_DIR, name)
             try:
+                if os.path.abspath(path) in pinned_paths:
+                    continue
                 st = os.stat(path)
                 if now - st.st_mtime > OUTPUT_TTL_SECONDS and os.path.isfile(path):
                     os.remove(path)
@@ -114,12 +192,48 @@ def _safe_suffix(filename: str) -> str:
     return ext if ext else ".mp4"
 
 
+def _check_frame_rate_limit(user_id: str):
+    now = time.monotonic()
+    cutoff = now - FRAME_RATE_LIMIT_WINDOW_SECONDS
+
+    with frame_rate_lock:
+        bucket = frame_rate_state.setdefault(user_id, deque())
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+
+        if len(bucket) >= FRAME_RATE_LIMIT_COUNT:
+            raise HTTPException(status_code=429, detail="Demasiadas solicitudes de frame. Reduce la frecuencia.")
+
+        bucket.append(now)
+
+
+async def _read_upload_limited(file: UploadFile, max_bytes: int, chunk_size: int = 1024 * 1024) -> bytes:
+    total = 0
+    chunks = []
+
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Frame demasiado grande. Máximo {MAX_FRAME_UPLOAD_MB:.1f}MB.",
+            )
+        chunks.append(chunk)
+
+    if not chunks:
+        return b""
+    return b"".join(chunks)
+
+
 async def _stream_upload_to_tempfile_and_hash(file: UploadFile) -> tuple[str, str, int]:
     suffix = _safe_suffix(file.filename or "")
     h = hashlib.sha256()
     total = 0
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=UPLOAD_DIR) as tmp:
         while True:
             chunk = await file.read(1024 * 1024)
             if not chunk:
@@ -170,6 +284,230 @@ def _job_update(job_id: str, **kwargs):
         j["updated_at"] = time.time()
 
 
+def _job_response(job_id: str, j: dict) -> dict:
+    return {
+        "job_id": job_id,
+        "state": j["state"],
+        "progress": j.get("progress", 0.0),
+        "message": j.get("message", ""),
+        "result": j.get("result"),
+        "error": j.get("error"),
+    }
+
+
+def _parse_result_json(result_json: str | None):
+    if not result_json:
+        return None
+    try:
+        return json.loads(result_json)
+    except Exception:
+        return None
+
+
+def _prune_jobs():
+    now = time.time()
+    removed = 0
+
+    with jobs_lock:
+        stale_ids = []
+        for job_id, data in jobs.items():
+            state = data.get("state")
+            updated_at = float(data.get("updated_at", data.get("created_at", now)))
+            if state in ("done", "error") and (now - updated_at) > JOB_RETENTION_SECONDS:
+                stale_ids.append(job_id)
+
+        for job_id in stale_ids:
+            if jobs.pop(job_id, None) is not None:
+                removed += 1
+
+        overflow = len(jobs) - JOB_MAX_ENTRIES
+        if overflow > 0:
+            oldest = sorted(
+                jobs.items(),
+                key=lambda kv: float(kv[1].get("updated_at", kv[1].get("created_at", 0.0)))
+            )
+            for job_id, _ in oldest[:overflow]:
+                if jobs.pop(job_id, None) is not None:
+                    removed += 1
+
+    if removed:
+        log.info("jobs: limpiados %d registros en memoria", removed)
+
+
+def _persist_job_fields(job_id: str, **fields):
+    db = SessionLocal()
+    try:
+        row = db.query(VideoJob).filter(VideoJob.job_id == job_id).first()
+        if not row:
+            return
+
+        for k, v in fields.items():
+            if hasattr(row, k):
+                setattr(row, k, v)
+        row.updated_at = datetime.utcnow()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        log.warning("job persist: no se pudo actualizar %s: %s", job_id, e)
+    finally:
+        db.close()
+
+
+def _job_dict_from_row(row: VideoJob) -> dict:
+    return {
+        "state": row.state,
+        "progress": float(row.progress or 0.0),
+        "message": row.message or "",
+        "user_id": row.user_id,
+        "result": _parse_result_json(row.result_json),
+        "error": row.error,
+        "created_at": row.created_at.timestamp() if row.created_at else time.time(),
+        "updated_at": row.updated_at.timestamp() if row.updated_at else time.time(),
+    }
+
+
+def _job_response_from_row(row: VideoJob) -> dict:
+    return {
+        "job_id": row.job_id,
+        "state": row.state,
+        "progress": float(row.progress or 0.0),
+        "message": row.message or "",
+        "result": _parse_result_json(row.result_json),
+        "error": row.error,
+    }
+
+
+def _mark_job_active(job_id: str) -> bool:
+    with active_jobs_lock:
+        if job_id in active_jobs:
+            return False
+        active_jobs.add(job_id)
+        return True
+
+
+def _mark_job_inactive(job_id: str):
+    with active_jobs_lock:
+        active_jobs.discard(job_id)
+
+
+def _enqueue_job(job_id: str) -> bool:
+    with active_jobs_lock:
+        if job_id in active_jobs:
+            return False
+
+    with queued_job_ids_lock:
+        if job_id in queued_job_ids:
+            return False
+        queued_job_ids.add(job_id)
+
+    job_queue.put(job_id)
+    return True
+
+
+def _job_worker_loop(worker_idx: int):
+    while True:
+        job_id = job_queue.get()
+        try:
+            if not _mark_job_active(job_id):
+                continue
+            _process_video_job_from_db(job_id)
+        except Exception as e:
+            log.exception("worker-%d: error procesando job %s: %s", worker_idx, job_id, e)
+        finally:
+            with queued_job_ids_lock:
+                queued_job_ids.discard(job_id)
+            job_queue.task_done()
+
+
+def _ensure_worker_pool():
+    global _worker_pool_started
+    if _worker_pool_started:
+        return
+
+    with _worker_pool_lock:
+        if _worker_pool_started:
+            return
+
+        for i in range(JOB_WORKER_COUNT):
+            t = threading.Thread(target=_job_worker_loop, args=(i + 1,), daemon=True)
+            t.start()
+        _worker_pool_started = True
+
+
+def _process_video_job_from_db(job_id: str):
+    try:
+        db = SessionLocal()
+        try:
+            claimed = (
+                db.query(VideoJob)
+                .filter(VideoJob.job_id == job_id, VideoJob.state == "queued")
+                .update(
+                    {
+                        VideoJob.state: "running",
+                        VideoJob.message: "Worker adquirido",
+                        VideoJob.error: None,
+                        VideoJob.started_at: datetime.utcnow(),
+                        VideoJob.updated_at: datetime.utcnow(),
+                    },
+                    synchronize_session=False,
+                )
+            )
+            db.commit()
+            if not claimed:
+                return
+
+            row = db.query(VideoJob).filter(VideoJob.job_id == job_id).first()
+            if not row:
+                return
+            input_path = row.input_path
+            conf = float(row.conf_used)
+            stride = int(row.stride_used)
+            size_bytes = int(row.size_bytes or 0)
+            user_id = row.user_id
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+        _process_video_job(job_id, input_path, conf, stride, size_bytes, user_id)
+    finally:
+        _mark_job_inactive(job_id)
+
+
+def _ensure_job_worker(job_id: str):
+    _ensure_worker_pool()
+    _enqueue_job(job_id)
+
+
+def _recover_persisted_jobs():
+    db = SessionLocal()
+    try:
+        rows = db.query(VideoJob).filter(VideoJob.state.in_(("queued", "running"))).all()
+        if not rows:
+            return
+
+        now = datetime.utcnow()
+        recovered_ids = []
+        for row in rows:
+            if row.state == "running":
+                row.state = "queued"
+                row.message = "Reanudado tras reinicio"
+                row.updated_at = now
+            recovered_ids.append(row.job_id)
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        log.warning("recover jobs: error restaurando cola: %s", e)
+        recovered_ids = []
+    finally:
+        db.close()
+
+    for job_id in recovered_ids:
+        _ensure_job_worker(job_id)
+
+
 def _to_bbox_norm_xyxy(x1, y1, x2, y2, w, h):
     x1c = max(0.0, min(float(x1), float(w)))
     y1c = max(0.0, min(float(y1), float(h)))
@@ -215,7 +553,7 @@ def me(current: User = Depends(get_current_user)):
 
 @app.get("/videos/{video_id}.mp4")
 def get_video(video_id: str, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
-    _cleanup_old_outputs()
+    _cleanup_old_outputs(db)
 
     owns = db.query(Analysis).filter(Analysis.user_id == current.id, Analysis.video_id == video_id).first()
     if not owns:
@@ -228,21 +566,65 @@ def get_video(video_id: str, db: Session = Depends(get_db), current: User = Depe
 
 
 @app.get("/status/{job_id}")
-def get_status(job_id: str, current: User = Depends(get_current_user)):
+def get_status(job_id: str, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    _prune_jobs()
+
     with jobs_lock:
         j = jobs.get(job_id)
-        if not j:
-            raise HTTPException(status_code=404, detail="Job no encontrado.")
+    if j:
         if j.get("user_id") != current.id:
             raise HTTPException(status_code=403, detail="No autorizado.")
-        return {
-            "job_id": job_id,
-            "state": j["state"],
-            "progress": j.get("progress", 0.0),
-            "message": j.get("message", ""),
-            "result": j.get("result"),
-            "error": j.get("error"),
+        return _job_response(job_id, j)
+
+    row = db.query(VideoJob).filter(VideoJob.job_id == job_id).first()
+    if row:
+        if row.user_id != current.id:
+            # Cache compartida: si el job está materializado para este usuario en analyses,
+            # devolvemos estado done aunque el dueño del registro de cola sea otro.
+            if row.state == "done":
+                analysis = db.query(Analysis).filter(Analysis.user_id == current.id, Analysis.video_id == job_id).first()
+                if analysis:
+                    result = _parse_result_json(analysis.result_json)
+                    synthetic = {
+                        "state": "done",
+                        "progress": 1.0,
+                        "message": "Listo (persistido)",
+                        "user_id": current.id,
+                        "result": result,
+                        "error": None,
+                        "created_at": time.time(),
+                        "updated_at": time.time(),
+                    }
+                    with jobs_lock:
+                        jobs[job_id] = synthetic
+                    return _job_response(job_id, synthetic)
+            raise HTTPException(status_code=403, detail="No autorizado.")
+        response = _job_response_from_row(row)
+        with jobs_lock:
+            jobs[job_id] = _job_dict_from_row(row)
+        if row.state == "queued":
+            _ensure_job_worker(job_id)
+        return response
+
+    # Fallback legado: jobs antiguos ya materializados en analyses.
+    analysis = db.query(Analysis).filter(Analysis.user_id == current.id, Analysis.video_id == job_id).first()
+    if analysis:
+        result = _parse_result_json(analysis.result_json)
+        synthetic = {
+            "state": "done",
+            "progress": 1.0,
+            "message": "Listo (persistido)",
+            "user_id": current.id,
+            "result": result,
+            "error": None,
+            "created_at": time.time(),
+            "updated_at": time.time(),
         }
+        with jobs_lock:
+            jobs[job_id] = synthetic
+        return _job_response(job_id, synthetic)
+
+    raise HTTPException(status_code=404, detail="Job no encontrado.")
 
 
 @app.post("/predict_video_annotated")
@@ -253,19 +635,21 @@ async def predict_video_annotated(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _cleanup_old_outputs()
+    _cleanup_old_outputs(db)
+    _prune_jobs()
 
     tmp_path, sha256_hex, size_bytes = await _stream_upload_to_tempfile_and_hash(file)
-    job_id = sha256_hex
+    job_id = _build_video_job_id(sha256_hex, float(conf), int(stride))
 
     cached_json_path = os.path.join(OUTPUT_DIR, f"{job_id}.json")
     cached_mp4_path = os.path.join(OUTPUT_DIR, f"{job_id}.mp4")
 
     if os.path.exists(cached_json_path) and os.path.exists(cached_mp4_path):
         existing = db.query(Analysis).filter(Analysis.user_id == current.id, Analysis.video_id == job_id).first()
+        with open(cached_json_path, "r", encoding="utf-8") as f:
+            result = f.read()
+
         if not existing:
-            with open(cached_json_path, "r", encoding="utf-8") as f:
-                result = f.read()
             a = Analysis(
                 user_id=current.id,
                 video_id=job_id,
@@ -275,6 +659,36 @@ async def predict_video_annotated(
                 stride_used=int(stride),
             )
             db.add(a)
+            db.commit()
+
+        row = db.query(VideoJob).filter(VideoJob.job_id == job_id).first()
+        if row is None:
+            row = VideoJob(
+                job_id=job_id,
+                user_id=current.id,
+                state="done",
+                progress=1.0,
+                message="Listo (cache)",
+                error=None,
+                result_json=result,
+                input_path="",
+                size_bytes=int(size_bytes),
+                conf_used=float(conf),
+                stride_used=int(stride),
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+                finished_at=datetime.utcnow(),
+            )
+            db.add(row)
+            db.commit()
+        elif row.user_id == current.id:
+            row.state = "done"
+            row.progress = 1.0
+            row.message = "Listo (cache)"
+            row.error = None
+            row.result_json = result
+            row.finished_at = datetime.utcnow()
+            row.updated_at = datetime.utcnow()
             db.commit()
 
         try:
@@ -288,13 +702,67 @@ async def predict_video_annotated(
                 "progress": 1.0,
                 "message": "Listo (cache)",
                 "user_id": current.id,
-                "result": json.loads(open(cached_json_path, "r", encoding="utf-8").read()),
+                "result": json.loads(result),
                 "error": None,
                 "created_at": time.time(),
                 "updated_at": time.time(),
             }
 
         return {"job_id": job_id, "cached": True}
+
+    row = db.query(VideoJob).filter(VideoJob.job_id == job_id).first()
+    if row:
+        if row.user_id != current.id:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=409,
+                detail="Este análisis ya está en cola por otro usuario. Espera a que termine para usar caché."
+            )
+
+        if row.state in ("queued", "running"):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+            with jobs_lock:
+                jobs[job_id] = _job_dict_from_row(row)
+            _ensure_job_worker(job_id)
+            return {"job_id": job_id, "cached": False, "reused": True}
+
+        row.state = "queued"
+        row.progress = 0.0
+        row.message = "En cola"
+        row.error = None
+        row.result_json = None
+        row.input_path = tmp_path
+        row.size_bytes = int(size_bytes)
+        row.conf_used = float(conf)
+        row.stride_used = int(stride)
+        row.started_at = None
+        row.finished_at = None
+        row.updated_at = datetime.utcnow()
+        db.commit()
+    else:
+        row = VideoJob(
+            job_id=job_id,
+            user_id=current.id,
+            state="queued",
+            progress=0.0,
+            message="En cola",
+            error=None,
+            result_json=None,
+            input_path=tmp_path,
+            size_bytes=int(size_bytes),
+            conf_used=float(conf),
+            stride_used=int(stride),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(row)
+        db.commit()
 
     with jobs_lock:
         jobs[job_id] = {
@@ -308,12 +776,7 @@ async def predict_video_annotated(
             "updated_at": time.time(),
         }
 
-    t = threading.Thread(
-        target=_process_video_job,
-        args=(job_id, tmp_path, float(conf), int(stride), size_bytes, current.id),
-        daemon=True
-    )
-    t.start()
+    _ensure_job_worker(job_id)
 
     return {"job_id": job_id, "cached": False}
 
@@ -326,19 +789,32 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
     with job_sema:
         try:
             _job_update(job_id, state="running", progress=0.01, message="Abriendo vídeo")
+            _persist_job_fields(
+                job_id,
+                state="running",
+                progress=0.01,
+                message="Abriendo vídeo",
+                error=None,
+                started_at=datetime.utcnow(),
+                finished_at=None,
+            )
 
             cap = cv2.VideoCapture(tmp_path)
             if not cap.isOpened():
                 raise RuntimeError("No se pudo abrir el vídeo.")
 
-            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            if fps <= 0.0:
+                fps = 25.0
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
 
-            duration = (frame_count / fps) if fps > 0 else 0.0
-            if duration > MAX_DURATION_SECONDS:
-                raise RuntimeError(f"Vídeo demasiado largo ({duration:.1f}s). Máximo {MAX_DURATION_SECONDS}s.")
+            duration_meta = (frame_count / fps) if frame_count > 0 else 0.0
+            if duration_meta > MAX_DURATION_SECONDS:
+                raise RuntimeError(f"Vídeo demasiado largo ({duration_meta:.1f}s). Máximo {MAX_DURATION_SECONDS}s.")
+            duration_limit_frames = max(1, int(MAX_DURATION_SECONDS * fps))
+            processed_frames = 0
 
             scale = min(MAX_OUTPUT_WIDTH / width, MAX_OUTPUT_HEIGHT / height, 1.0)
             out_w = int(width * scale)
@@ -369,6 +845,11 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
                 ret, frame = cap.read()
                 if not ret:
                     break
+                processed_frames += 1
+
+                # Cuando el contenedor no informa frame_count, cortamos por frames procesados.
+                if processed_frames > duration_limit_frames:
+                    raise RuntimeError(f"Vídeo demasiado largo (>{MAX_DURATION_SECONDS:.1f}s). Máximo {MAX_DURATION_SECONDS}s.")
 
                 if frame_count > 0 and frame_idx % max(1, frame_count // 100) == 0:
                     p = 0.05 + 0.70 * (frame_idx / frame_count)
@@ -464,6 +945,7 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                timeout=FFMPEG_TIMEOUT_SECONDS,
                 check=True
             )
 
@@ -494,18 +976,20 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
                 enriched["top_species"] = top_for_segment(seg)
                 segments_enriched.append(enriched)
 
+            duration_effective = duration_meta if duration_meta > 0 else (processed_frames / fps if fps > 0 else 0.0)
+            frame_count_effective = frame_count if frame_count > 0 else processed_frames
             video_url = f"/videos/{job_id}.mp4"
             result = {
                 "video_id": job_id,
                 "video_url": video_url,
                 "video_info": {
                     "fps": float(fps),
-                    "frame_count": int(frame_count),
+                    "frame_count": int(frame_count_effective),
                     "width": int(width if scale == 1.0 else out_w),
                     "height": int(height if scale == 1.0 else out_h),
                     "frame_stride": int(stride),
                     "conf_used": float(conf),
-                    "duration_seconds": float(duration),
+                    "duration_seconds": float(duration_effective),
                     "upload_bytes": int(size_bytes),
                     "scaled_from": {"width": int(width), "height": int(height)} if scale < 1.0 else None,
                 },
@@ -515,6 +999,7 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
                 "species_ranking": species_ranking,
                 "species_segments": species_segments,
             }
+            result_json = json.dumps(result, ensure_ascii=False)
 
             json_path = os.path.join(OUTPUT_DIR, f"{job_id}.json")
             with open(json_path, "w", encoding="utf-8") as f:
@@ -528,7 +1013,7 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
                         user_id=user_id,
                         video_id=job_id,
                         mp4_path=final_mp4_path,
-                        result_json=json.dumps(result, ensure_ascii=False),
+                        result_json=result_json,
                         conf_used=float(conf),
                         stride_used=int(stride),
                     )
@@ -537,12 +1022,50 @@ def _process_video_job(job_id: str, tmp_path: str, conf: float, stride: int, siz
             finally:
                 db.close()
 
+            _persist_job_fields(
+                job_id,
+                state="done",
+                progress=1.0,
+                message="Listo",
+                error=None,
+                result_json=result_json,
+                finished_at=datetime.utcnow(),
+            )
             _job_update(job_id, state="done", progress=1.0, message="Listo", result=result)
 
+        except subprocess.TimeoutExpired:
+            err = f"FFmpeg superó el timeout de {FFMPEG_TIMEOUT_SECONDS}s"
+            _persist_job_fields(
+                job_id,
+                state="error",
+                progress=1.0,
+                message=err,
+                error=err,
+                finished_at=datetime.utcnow(),
+            )
+            _job_update(job_id, state="error", progress=1.0, error=err)
         except subprocess.CalledProcessError:
-            _job_update(job_id, state="error", progress=1.0, error="FFmpeg falló (¿ffmpeg + libx264 instalados?)")
+            err = "FFmpeg falló (¿ffmpeg + libx264 instalados?)"
+            _persist_job_fields(
+                job_id,
+                state="error",
+                progress=1.0,
+                message=err,
+                error=err,
+                finished_at=datetime.utcnow(),
+            )
+            _job_update(job_id, state="error", progress=1.0, error=err)
         except Exception as e:
-            _job_update(job_id, state="error", progress=1.0, error=str(e))
+            err = str(e)
+            _persist_job_fields(
+                job_id,
+                state="error",
+                progress=1.0,
+                message=err,
+                error=err,
+                finished_at=datetime.utcnow(),
+            )
+            _job_update(job_id, state="error", progress=1.0, error=err)
         finally:
             try:
                 if writer is not None:
@@ -615,8 +1138,9 @@ def list_public_posts(
     limit = max(1, min(limit, 50))
     offset = max(0, offset)
 
-    posts = (
-        db.query(Post)
+    rows = (
+        db.query(Post, User.email)
+        .outerjoin(User, User.id == Post.user_id)
         .order_by(Post.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -624,15 +1148,14 @@ def list_public_posts(
     )
 
     out = []
-    for p in posts:
-        author = db.query(User).filter(User.id == p.user_id).first()
+    for p, author_email in rows:
         out.append({
             "id": p.id,
             "video_id": p.video_id,
             "title": p.title,
             "description": p.description,
             "created_at": p.created_at.isoformat(),
-            "author": author.email if author else "unknown",
+            "author": author_email if author_email else "unknown",
             "public_video_url": f"/public/posts/{p.id}.mp4",
         })
 
@@ -641,7 +1164,7 @@ def list_public_posts(
 
 @app.get("/public/posts/{post_id}.mp4")
 def get_public_post_video(post_id: str, db: Session = Depends(get_db)):
-    _cleanup_old_outputs()
+    _cleanup_old_outputs(db)
 
     post = db.query(Post).filter(Post.id == post_id).first()
     if not post:
@@ -708,10 +1231,12 @@ async def predict_image(
 @app.post("/predict_frame_fast")
 async def predict_frame_fast(
     file: UploadFile = File(...),
-    conf: confloat(ge=0.0, le=1.0) = DEFAULT_MIN_CONF,
+    conf: confloat(ge=0.0, le=1.0) = Form(DEFAULT_MIN_CONF),
     current: User = Depends(get_current_user),
 ):
-    data = await file.read()
+    _check_frame_rate_limit(current.id)
+
+    data = await _read_upload_limited(file, MAX_FRAME_UPLOAD_BYTES)
     if not data:
         return {"ok": True, "detections": []}
 
@@ -720,14 +1245,25 @@ async def predict_frame_fast(
         return {"ok": True, "detections": []}
 
     h, w = img.shape[:2]
+    conf_value = float(conf)
 
-    results = model.predict(
-        source=img,
-        conf=float(conf),
-        imgsz=640,
-        verbose=False,
-        device="cpu"
-    )
+    try:
+        loop = asyncio.get_running_loop()
+        results = await asyncio.wait_for(
+            loop.run_in_executor(
+                frame_infer_executor,
+                lambda: model.predict(
+                    source=img,
+                    conf=conf_value,
+                    imgsz=640,
+                    verbose=False,
+                    device="cpu",
+                ),
+            ),
+            timeout=FRAME_INFER_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Timeout en inferencia de frame.")
 
     r = results[0]
     dets = []

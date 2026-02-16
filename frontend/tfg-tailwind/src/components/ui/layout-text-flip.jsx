@@ -8,6 +8,7 @@ export const LayoutTextFlip = ({
   words = ["Landing Pages", "Component Blocks", "Page Sections", "3D Shaders"],
   duration = 3000
 }) => {
+  const Motion = motion;
   const [currentIndex, setCurrentIndex] = useState(0);
 
   useEffect(() => {
@@ -16,20 +17,20 @@ export const LayoutTextFlip = ({
     }, duration);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [duration, words.length]);
 
   return (
     <>
-      <motion.span
+      <Motion.span
         layoutId="subtext"
         className="text-2xl font-bold tracking-tight drop-shadow-lg md:text-4xl text-white">
         {text}
-      </motion.span>
-      <motion.span
+      </Motion.span>
+      <Motion.span
         layout
         className="relative w-fit overflow-hidden rounded-md border border-transparent bg-transparent px-4 py-2 font-sans text-2xl font-bold tracking-tight text-green-500 shadow-sm shadow-black/10  drop-shadow-lg md:text-4xl dark:bg-neutral-900 dark:text-white dark:shadow-sm dark:shadow-white/10 ">
         <AnimatePresence mode="popLayout">
-          <motion.span
+          <Motion.span
             key={currentIndex}
             initial={{ y: -40, filter: "blur(10px)" }}
             animate={{
@@ -42,9 +43,9 @@ export const LayoutTextFlip = ({
             }}
             className={cn("inline-block whitespace-nowrap")}>
             {words[currentIndex]}
-          </motion.span>
+          </Motion.span>
         </AnimatePresence>
-      </motion.span>
+      </Motion.span>
     </>
   );
 };

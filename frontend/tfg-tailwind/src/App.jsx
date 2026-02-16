@@ -1,13 +1,22 @@
-import {useState} from "react";
+import {Suspense, lazy, useState} from "react";
 import {BrowserRouter, Link, Route, Routes, useLocation} from "react-router-dom";
 import {useAuth} from "./auth/AuthContext";
-import AuthGate from "./components/AuthGate";
-import FeedPage from "./components/FeedPage";
-import ImageDetector from "./components/ImageDetector";
-import LiveCamsPage from "./components/LiveCamsPage";
-import StreamDetector from "./components/StreamDetector";
 import UserBadge from "./components/UserBadge";
-import VideoDetector from "./components/VideoDetector";
+
+const AuthGate = lazy(() => import("./components/AuthGate"));
+const FeedPage = lazy(() => import("./components/FeedPage"));
+const ImageDetector = lazy(() => import("./components/ImageDetector"));
+const LiveCamsPage = lazy(() => import("./components/LiveCamsPage"));
+const StreamDetector = lazy(() => import("./components/StreamDetector"));
+const VideoDetector = lazy(() => import("./components/VideoDetector"));
+
+function RouteLoader() {
+	return (
+		<div className="mx-auto w-full max-w-5xl rounded-3xl border border-white/60 bg-white/80 p-6 text-sm text-slate-700 shadow-xl backdrop-blur-xl">
+			Carregant mòdul...
+		</div>
+	);
+}
 
 function Home({tab}) {
 	return <AuthGate>{tab === "image" ? <ImageDetector /> : <VideoDetector />}</AuthGate>;
@@ -69,40 +78,42 @@ function AppShell() {
 						)}
 					</header>
 
-					<Routes>
-						<Route path="/" element={<Home tab={tab} />} />
-						<Route
-							path="/feed"
-							element={
-								<AuthGate>
-									<FeedPage />
-								</AuthGate>
-							}
-						/>
-						<Route
-							path="/live"
-							element={
-								<AuthGate>
-									<LiveCamsPage />
-								</AuthGate>
-							}
-						/>
-						<Route
-							path="/stream"
-							element={
-								<AuthGate>
-									<StreamDetector />
-								</AuthGate>
-							}
-						/>
-					</Routes>
+						<Suspense fallback={<RouteLoader />}>
+							<Routes>
+								<Route path="/" element={<Home tab={tab} />} />
+								<Route
+									path="/feed"
+									element={
+										<AuthGate>
+											<FeedPage />
+										</AuthGate>
+									}
+								/>
+								<Route
+									path="/live"
+									element={
+										<AuthGate>
+											<LiveCamsPage />
+										</AuthGate>
+									}
+								/>
+								<Route
+									path="/stream"
+									element={
+										<AuthGate>
+											<StreamDetector />
+										</AuthGate>
+									}
+								/>
+							</Routes>
+						</Suspense>
 
-					{!isStreamPage && <div className="h-10" />}
+						{!isStreamPage && <div className="h-10" />}
+					</div>
 				</div>
 			</div>
-		</div>
-	);
-}
+		);
+	}
 
 export default function App() {
 	return (

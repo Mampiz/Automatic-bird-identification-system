@@ -1,4 +1,4 @@
-import {useEffect, useState} from "react";
+import {useCallback, useEffect, useState} from "react";
 import {useAuth} from "../auth/AuthContext";
 import {API_BASE} from "../lib/api";
 
@@ -17,14 +17,13 @@ function FeedPage() {
 
 	const limit = 10;
 
-	const load = async newOffset => {
+	const load = useCallback(async newOffset => {
 		setLoading(true);
 		setError("");
-		try {
-			const url = `${API_BASE}/posts/public?limit=${limit}&offset=${newOffset}`;
+			try {
+				const url = `${API_BASE}/posts/public?limit=${limit}&offset=${newOffset}`;
 
-	
-			const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
+				const headers = token ? {Authorization: `Bearer ${token}`} : undefined;
 
 			const res = await fetch(url, {headers});
 
@@ -33,17 +32,17 @@ function FeedPage() {
 			try {
 				data = text ? JSON.parse(text) : null;
 			} catch {
-				
+				data = null;
 			}
 
 			if (!res.ok) {
 				throw new Error((data && data.detail) || text || "Error cargando feed");
 			}
 
-			const nextItems = (data?.items || []).map(p => ({
-				...p,
-				public_video_url: absApiUrl(p.public_video_url) // 🔥 clave
-			}));
+				const nextItems = (data?.items || []).map(p => ({
+					...p,
+					public_video_url: absApiUrl(p.public_video_url)
+				}));
 
 			if (newOffset === 0) setItems(nextItems);
 			else setItems(prev => [...prev, ...nextItems]);
@@ -54,11 +53,11 @@ function FeedPage() {
 		} finally {
 			setLoading(false);
 		}
-	};
+	}, [limit, token]);
 
 	useEffect(() => {
 		load(0);
-	}, []);
+	}, [load]);
 
 	return (
 		<main className="bg-white/80 backdrop-blur-xl border border-white/70 shadow-xl rounded-3xl p-6 sm:p-8 lg:p-10 flex flex-col gap-6 w-full mx-auto">

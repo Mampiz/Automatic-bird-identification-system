@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 from passlib.context import CryptContext
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from models import User
+
+log = logging.getLogger("birds-auth")
 
 pwd_context = CryptContext(
     schemes=["argon2"],
@@ -24,6 +27,20 @@ if not JWT_SECRET:
     if ENV in ("prod", "production"):
         raise RuntimeError("JWT_SECRET no definido en producción.")
     JWT_SECRET = "dev_insecure_change_me"
+
+INSECURE_JWT_SECRETS = {
+    "dev_insecure_change_me",
+    "changeme",
+    "change_me",
+    "secret",
+    "password",
+}
+
+if ENV in ("prod", "production") and JWT_SECRET in INSECURE_JWT_SECRETS:
+    raise RuntimeError("JWT_SECRET inseguro para producción. Configura un secret robusto.")
+
+if ENV not in ("prod", "production") and JWT_SECRET in INSECURE_JWT_SECRETS:
+    log.warning("JWT_SECRET de desarrollo inseguro detectado (esperable solo en local).")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 

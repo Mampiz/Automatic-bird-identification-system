@@ -45,6 +45,17 @@ Este comando levanta:
 
 ---
 
+## Variables de entorno relevantes
+
+- `JWT_SECRET`: obligatorio en producción.
+- `FRONTEND_ORIGINS`: permite lista separada por comas o JSON array.
+- `JOB_RETENTION_SECONDS`: tiempo en segundos para mantener jobs en memoria.
+- `JOB_MAX_ENTRIES`: límite máximo de jobs en memoria.
+
+La cola/estado de análisis de vídeo se persiste en PostgreSQL (`video_jobs`), y al reiniciar backend se reanudan jobs en `queued/running`.
+
+---
+
 ## Detener los servicios
 
 Para detener los contenedores:

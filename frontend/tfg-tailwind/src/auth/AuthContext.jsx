@@ -1,19 +1,21 @@
-import {createContext, useContext, useEffect, useMemo, useState} from "react";
+/* eslint-disable react-refresh/only-export-components */
+import {createContext, useContext, useMemo, useState} from "react";
 import { API_BASE } from "../lib/api";
 const AuthContext = createContext(null);
 
-export function AuthProvider({children}) {
-	const [token, setToken] = useState(null);
-	const [userEmail, setUserEmail] = useState(null);
-	const [booting, setBooting] = useState(true);
+function readStoredValue(key) {
+	if (typeof window === "undefined") return null;
+	try {
+		return localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
 
-	useEffect(() => {
-		const t = localStorage.getItem("token");
-		const e = localStorage.getItem("userEmail");
-		if (t) setToken(t);
-		if (e) setUserEmail(e);
-		setBooting(false);
-	}, []);
+export function AuthProvider({children}) {
+	const [token, setToken] = useState(() => readStoredValue("token"));
+	const [userEmail, setUserEmail] = useState(() => readStoredValue("userEmail"));
+	const booting = false;
 
 	const login = async ({email, password}) => {
 		const form = new FormData();
