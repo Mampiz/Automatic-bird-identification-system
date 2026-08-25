@@ -6,8 +6,8 @@ Dataset preparation, two-stage training, a GPU-aware FastAPI inference service, 
 Final Degree Project (TFG) — Computer Engineering, **EPSEVG · Universitat Politècnica de Catalunya (UPC)**
 Developed in collaboration with the environmental association **Alytes (Canyelles)** for educational and outreach purposes.
 
-[![backend](https://github.com/Mampiz/Automatic-bird-identification-system/actions/workflows/backend.yml/badge.svg)](https://github.com/Mampiz/Automatic-bird-identification-system/actions/workflows/backend.yml)
-[![frontend](https://github.com/Mampiz/Automatic-bird-identification-system/actions/workflows/frontend.yml/badge.svg)](https://github.com/Mampiz/Automatic-bird-identification-system/actions/workflows/frontend.yml)
+[![backend](https://github.com/Mampiz/birdvision/actions/workflows/backend.yml/badge.svg)](https://github.com/Mampiz/birdvision/actions/workflows/backend.yml)
+[![frontend](https://github.com/Mampiz/birdvision/actions/workflows/frontend.yml/badge.svg)](https://github.com/Mampiz/birdvision/actions/workflows/frontend.yml)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-663366.svg)](LICENSE)
 
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
