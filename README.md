@@ -6,6 +6,10 @@ Dataset preparation, two-stage training, a GPU-aware FastAPI inference service, 
 Final Degree Project (TFG) — Computer Engineering, **EPSEVG · Universitat Politècnica de Catalunya (UPC)**
 Developed in collaboration with the environmental association **Alytes (Canyelles)** for educational and outreach purposes.
 
+[![backend](https://github.com/Mampiz/Automatic-bird-identification-system/actions/workflows/backend.yml/badge.svg)](https://github.com/Mampiz/Automatic-bird-identification-system/actions/workflows/backend.yml)
+[![frontend](https://github.com/Mampiz/Automatic-bird-identification-system/actions/workflows/frontend.yml/badge.svg)](https://github.com/Mampiz/Automatic-bird-identification-system/actions/workflows/frontend.yml)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-663366.svg)](LICENSE)
+
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![Ultralytics](https://img.shields.io/badge/Ultralytics-YOLO12-111F68)
@@ -45,6 +49,7 @@ Developed in collaboration with the environmental association **Alytes (Canyelle
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Local Development](#local-development)
+- [Testing](#testing)
 - [Engineering Decisions](#engineering-decisions)
 - [Limitations](#limitations)
 - [Future Work](#future-work)
@@ -635,7 +640,16 @@ birdvision/
 │   ├── models.py                  # User · Analysis · Post · VideoJob
 │   ├── bestgen.pt                 # General detector — 101 species (default)
 │   ├── bestcam.pt                 # Fixed-camera detector — 23 classes
+│   ├── tests/                     # 71 unit + API tests, no GPU required
+│   │   ├── conftest.py            # Stubs ultralytics/cv2, SQLite fixtures
+│   │   ├── test_helpers.py        # Job ids, segments, bboxes, colours, CORS
+│   │   ├── test_auth.py           # Argon2 hashing, JWT issue/verify
+│   │   ├── test_api_auth.py       # Register/login/me over a real database
+│   │   └── test_rate_limit.py     # Per-user sliding window
 │   ├── requirements.txt
+│   ├── requirements-dev.txt       # Test deps, without torch
+│   ├── pytest.ini
+│   ├── ruff.toml
 │   ├── Dockerfile                 # python:3.11-slim + ffmpeg/libx264/libgl → gunicorn
 │   ├── .env.example
 │   └── README.md
@@ -670,6 +684,11 @@ birdvision/
 │   ├── nginx.conf                 # RTMP :1935 → HLS, HTTP :8080 serves /hls with CORS
 │   └── Dockerfile                 # tiangolo/nginx-rtmp + custom config
 │
+├── .github/workflows/
+│   ├── backend.yml                # ruff + pytest on Python 3.11 and 3.12
+│   └── frontend.yml               # eslint + production build
+│
+├── LICENSE                        # AGPL-3.0 (see Licence)
 └── docker-compose.yml             # postgres:16 + nginx-rtmp + backend
 ```
 
@@ -795,6 +814,50 @@ Backend logs go to stdout under the `birds-backend` / `birds-auth` loggers — m
 
 ---
 
+## Testing
+
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest            # 71 tests, ~3 seconds
+ruff check .
+```
+
+Both run on every push through the [`backend`](.github/workflows/backend.yml)
+workflow, against Python 3.11 and 3.12.
+
+### What is covered
+
+| Area | What is asserted |
+|------|------------------|
+| Job identity | The deduplication key is stable, normalises confidence to four decimals, and changes when any input changes |
+| Detection segments | Timestamps collapse into segments, a gap exactly at the threshold still merges, input order does not matter |
+| Bounding boxes | Coordinates are clamped to the frame, and a zero-sized frame does not divide by zero |
+| Species colours | Deterministic per species and never darker than the readable floor |
+| CORS origins | Comma-separated, JSON array, wildcard, and malformed input that must not crash the process at import |
+| Uploads | Extensions are lower-cased with a safe default |
+| Passwords | Argon2, salted, and a wrong password is rejected |
+| Tokens | Round-trip, expiry, another signing key, a missing subject, and garbage |
+| Auth endpoints | Registration rules, email normalisation, and that a wrong password and an unknown account are **indistinguishable** |
+| Authorisation | `/auth/me` and video download reject anonymous callers; one user cannot fetch another's video |
+| Rate limiting | Per-user buckets, a sliding window, and that the bucket does not grow without bound |
+
+### How they run without a GPU
+
+`main.py` loads the YOLO weights at import time, so importing it normally means
+torch, CUDA and 200 MB of wheels before a single assertion runs.
+[`tests/conftest.py`](backend/tests/conftest.py) replaces `ultralytics` and `cv2`
+with stubs and points `DATABASE_URL` at in-memory SQLite, so the suite tests the
+logic that decides what the API returns — job identity, segment grouping,
+authorisation, rate limiting — in about three seconds, on any runner.
+
+That is a deliberate boundary, not a shortcut: everything that genuinely needs
+inference belongs in an integration test run against the real `requirements.txt`
+and the real checkpoints, which is listed under [Future Work](#future-work).
+
+---
+
 ## Engineering Decisions
 
 **Why YOLO (one-stage) instead of a two-stage detector?**
@@ -868,7 +931,7 @@ Honest boundaries of the current system:
 
 **Machine Learning** — expand species coverage and geographic diversity; publish per-class metrics and confusion matrices; add multi-object **tracking** (ByteTrack/BoT-SORT are already available in Ultralytics) to count individuals instead of detections and to enforce temporal consistency; export to **TensorRT** or ONNX Runtime and quantise (INT8) for cheaper inference; batch frames from multiple viewers into a single forward pass.
 
-**Backend** — move outputs to **S3** with presigned URLs (unlocking multi-task scaling); replace the in-process worker pool with **Redis + Celery/RQ** so workers scale independently of the API; dedicated GPU worker tasks for video jobs; Alembic migrations; automated tests; refresh tokens and `httpOnly` cookie storage.
+**Backend** — move outputs to **S3** with presigned URLs (unlocking multi-task scaling); replace the in-process worker pool with **Redis + Celery/RQ** so workers scale independently of the API; dedicated GPU worker tasks for video jobs; Alembic migrations; **integration tests running against the real weights** (the current suite stubs inference on purpose — see [Testing](#testing)); refresh tokens and `httpOnly` cookie storage.
 
 **Streaming** — **WebRTC** for sub-second latency where HLS's segment delay is unacceptable; adaptive bitrate ladders; authenticated stream publishing (`on_publish` callbacks in nginx-rtmp) and authenticated playback; a proper camera registry instead of directory scanning.
 
@@ -913,4 +976,16 @@ Drop them in `docs/images/` and reference them as `![Image detection](docs/image
 **EPSEVG · Universitat Politècnica de Catalunya (UPC)**
 In collaboration with **Alytes** (Canyelles) — environmental education and outreach.
 
-> **Licensing note.** The trained weights derive from **Ultralytics YOLO**, which is distributed under **AGPL-3.0**; both checkpoints in this repository carry that licence string in their metadata. Any redistribution or network use of this system must comply with AGPL-3.0, or with a commercial Ultralytics licence. Choose the repository licence accordingly.
+### Licence
+
+This project is licensed under the **[GNU Affero General Public License v3.0](LICENSE)**.
+
+That choice is forced, not stylistic. The trained weights derive from
+**Ultralytics YOLO**, distributed under AGPL-3.0, and both checkpoints in this
+repository carry that licence string in their metadata. AGPL-3.0 is *viral over
+the network*: because this system is served to users over HTTP, anyone who runs a
+modified version as a service has to offer them its source. A permissive licence
+such as MIT or Apache-2.0 would have been incompatible with the weights it ships.
+
+If you want to use this without those obligations, you need a commercial
+Ultralytics licence **and** to retrain the weights under it.

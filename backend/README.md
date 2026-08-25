@@ -56,6 +56,30 @@ La cola/estado de análisis de vídeo se persiste en PostgreSQL (`video_jobs`), 
 
 ---
 
+## Tests
+
+Los tests no necesitan GPU, ni los pesos, ni PostgreSQL: `tests/conftest.py`
+sustituye `ultralytics` y `cv2` por stubs y apunta `DATABASE_URL` a SQLite en
+memoria. Por eso se instalan `requirements-dev.txt` y no `requirements.txt`, que
+arrastraría torch.
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+pytest          # 71 tests, ~3 segundos
+ruff check .
+```
+
+Cubren la lógica que decide qué devuelve la API: identidad de jobs, agrupación de
+detecciones en segmentos, recorte de bounding boxes, hashing y tokens, las rutas
+de autenticación contra una base de datos real, y el rate limiter por usuario.
+
+Lo que necesita inferencia de verdad va en tests de integración contra
+`requirements.txt` y los checkpoints reales, que todavía no existen.
+
+---
+
 ## Detener los servicios
 
 Para detener los contenedores:
