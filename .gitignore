@@ -1,3 +1,8 @@
+# Secrets. docker-compose.prod.yml reads this file; it must never be committed.
+.env
+.env.*
+!.env.example
+
 # Tooling caches that land at the repository root
 .ruff_cache/
 .pytest_cache/

@@ -1,0 +1,74 @@
+# Production stack, intended for a single small VM (this is what runs on the
+# Oracle Always Free instance).
+#
+# Differences from docker-compose.yml, which is the local development file:
+#   - no source bind mounts: the image is the artefact
+#   - every secret comes from .env, nothing is inlined
+#   - restart policies and healthchecks, so a reboot brings the demo back
+#   - Postgres is not published to the host; only the backend reaches it
+#   - Cloudflare Tunnel terminates TLS, so no port has to be opened to the
+#     internet and no certificate has to be renewed by hand
+#
+# Bring it up with:
+#   docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-birdsdb}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Deliberately not published: nothing outside this network needs Postgres,
+    # and a database on a public IP is a database that gets found.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-birdsdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  nginx-rtmp:
+    build: ./nginx-rtmp
+    restart: unless-stopped
+    ports:
+      # RTMP has to be reachable for a camera to publish. This is the one thing
+      # a PaaS free tier cannot host: they expose HTTP and nothing else.
+      - "1935:1935"
+    volumes:
+      - hls:/hls
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ENV: prod
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-birdsdb}
+      HLS_DIR: /hls
+    volumes:
+      - outputs:/app/outputs
+      - hls:/hls:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      nginx-rtmp:
+        condition: service_started
+    # Not published either: the tunnel reaches it over the compose network, so
+    # the API is never exposed on the VM's public IP.
+    expose:
+      - "8000"
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  outputs:
+  hls:

@@ -557,6 +557,11 @@ Passwords are hashed with **Argon2** (`passlib`); tokens are **HS256 JWTs** carr
 
 ## Deployment
 
+> **Running the live demo?** The architecture below is the AWS design. The public
+> demo runs the whole stack on a single free VM instead — see
+> **[Deploying the live demo](docs/deploy-demo.md)** for the runbook, including
+> why a 512 MB PaaS free tier cannot host it and how LiveCams stay working.
+
 ```mermaid
 flowchart TD
     subgraph Client
