@@ -116,13 +116,25 @@ password and the tunnel token.
 
 ## 4. Create the Cloudflare tunnel
 
-In the Cloudflare dashboard, under **Zero Trust → Networks → Tunnels**, create a
-tunnel and copy its token into `.env`. Then add two public hostnames:
+> **Prerequisite: a domain on Cloudflare.** Published hostnames require a website
+> added to your Cloudflare account. If you do not have one, see
+> [without a domain](#without-a-domain) below.
 
-| Hostname | Service |
-|----------|---------|
-| `api.yourdomain.com` | `http://backend:8000` |
-| `hls.yourdomain.com` | `http://nginx-rtmp:8080` |
+Go to [**Networking → Tunnels**](https://dash.cloudflare.com/?to=/:account/tunnels),
+create a tunnel, and choose **Docker** when it offers you an install command. The
+command contains `--token eyJ...`; that token is what goes into
+`CLOUDFLARE_TUNNEL_TOKEN` in `.env` — the compose file runs cloudflared for you,
+so you do not run the command it shows.
+
+Then, on the tunnel's **Routes** tab, **Add route → Published application** twice:
+
+| Subdomain | Service URL |
+|-----------|-------------|
+| `api` | `http://backend:8000` |
+| `hls` | `http://nginx-rtmp:8080` |
+
+Those service URLs use the compose service names, not `localhost`: cloudflared
+runs as a container on the same network and reaches its neighbours by name.
 
 The second one is what lets a browser play the HLS stream over HTTPS. Without it
 the page loads over TLS and the video does not, and the browser blocks it as mixed
@@ -188,6 +200,20 @@ are proportionally slower, which is why `MAX_CONCURRENT_JOBS` is 1.
 
 The demo is there to show that the system works end to end, not to reproduce the
 benchmark.
+
+### Without a domain
+
+Published hostnames need a domain in your Cloudflare account. Two ways around it:
+
+- **A free subdomain plus Caddy.** Register a name at
+  [DuckDNS](https://www.duckdns.org) or similar, point it at the VM's public IP,
+  open 80 and 443, and put [Caddy](https://caddyserver.com) in front of the
+  backend. Caddy obtains and renews a Let's Encrypt certificate on its own. You
+  drop the `tunnel` service from the compose file.
+- **A quick tunnel.** `cloudflared tunnel --url http://localhost:8000` gives a
+  free `*.trycloudflare.com` URL with no account at all — but it is random and
+  changes every restart, so the frontend would have to be rebuilt each time. Fine
+  for showing someone something today, not for a demo that has to keep working.
 
 ### If the container is killed
 
