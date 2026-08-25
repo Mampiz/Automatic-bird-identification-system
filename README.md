@@ -627,7 +627,7 @@ Implemented, and verifiable in the code:
 ## Repository Structure
 
 ```text
-Automatic-bird-identification-system/
+birdvision/
 ├── backend/                       # FastAPI inference service
 │   ├── main.py                    # Endpoints, video pipeline, job queue, HLS discovery (~1.3k lines)
 │   ├── auth.py                    # Argon2 hashing, JWT issue/verify, current-user dependency
@@ -691,11 +691,11 @@ Automatic-bird-identification-system/
 ### Quick start (everything containerised)
 
 ```bash
-git clone https://github.com/Mampiz/Automatic-bird-identification-system.git
+git clone https://github.com/Mampiz/birdvision.git
 ```
 
 ```bash
-cd Automatic-bird-identification-system && docker compose up --build
+cd birdvision && docker compose up --build
 ```
 
 This starts PostgreSQL (`:5432`), NGINX-RTMP (`:1935` RTMP, `:8080` HLS) and the backend (`:8000`). Tables are created automatically on first boot.
