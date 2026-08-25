@@ -1,0 +1,24 @@
+# Dependencies for running the test suite.
+#
+# Deliberately NOT "-r requirements.txt": that pulls ultralytics, and with it
+# torch, which is hundreds of megabytes and needs a GPU to be worth anything.
+# The tests stub ultralytics and cv2 (see tests/conftest.py), so what is left is
+# the web layer, the ORM and the crypto — everything the tests actually exercise.
+#
+# Anything that genuinely needs inference belongs in an integration test run
+# against the real requirements.txt.
+
+fastapi>=0.110
+python-multipart>=0.0.9
+pydantic>=2.6
+sqlalchemy>=2.0
+passlib[argon2]>=1.7.4
+argon2-cffi>=23.1.0
+python-jose[cryptography]>=3.3.0
+python-dotenv>=1.0.1
+numpy>=1.26
+
+pytest>=8.0
+pytest-asyncio>=0.23
+httpx>=0.27
+ruff>=0.6
