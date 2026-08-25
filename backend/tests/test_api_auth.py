@@ -111,3 +111,17 @@ class TestProtectedRoutes:
         # Authenticated but not the owner: forbidden, not "not found", and
         # certainly not the file.
         assert response.status_code == 403
+
+
+class TestHealth:
+    def test_is_public(self, app_client):
+        """The probe must answer without credentials, or it cannot be a probe."""
+        response = app_client.get("/health")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+    def test_reports_which_model_is_loaded(self, app_client):
+        body = app_client.get("/health")
+
+        assert body.json()["model"]

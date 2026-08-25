@@ -519,6 +519,22 @@ def _to_bbox_norm_xyxy(x1, y1, x2, y2, w, h):
     return [x1c / w, y1c / h, x2c / w, y2c / h], [x1c, y1c, x2c, y2c]
 
 
+@app.get("/health")
+def health():
+    """Liveness probe.
+
+    Deliberately checks nothing external: if this reported unhealthy whenever
+    Postgres hiccuped, the orchestrator would restart a process that is working
+    fine and take the API down with it. It answers the only question a restart
+    can fix - is this process alive and did the model load.
+    """
+    return {
+        "status": "ok",
+        "model": MODEL_PATH,
+        "workers": JOB_WORKER_COUNT,
+    }
+
+
 @app.post("/auth/register")
 def register(email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     email = email.strip().lower()
