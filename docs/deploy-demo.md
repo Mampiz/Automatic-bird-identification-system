@@ -7,21 +7,27 @@ deployment that runs the public demo**: one small VM running the whole stack.
 ## Why a VM and not a PaaS free tier
 
 The backend loads YOLO weights into memory at import time. Measured on the image
-this repository builds, idle and before serving a single request:
+this repository builds, running on CPU:
 
 ```
-image size          843 MB
-resident memory     742 MB
+image size                        843 MB
+after importing torch             260 MB
+after loading the weights         353 MB
+after one 1080p inference         526 MB
+peak, several inferences          575 MB
 ```
 
-That second number rules out most of the obvious options:
+Peak resident memory is the number that decides where this can run, and it is not
+the idle figure: inference allocates several times what the loaded model occupies.
+That rules out most of the obvious options:
 
 | Option | Free RAM | Verdict |
 |--------|----------|---------|
-| Render, Koyeb | 512 MB | 742 MB does not fit in 512 MB; killed on startup |
+| Render, Koyeb | 512 MB | A 575 MB peak does not fit; killed on the first inference |
 | Fly.io | — | No free tier for new accounts |
 | Hugging Face Spaces | 16 GB | Docker Spaces require a paid plan |
 | Google Cloud Run | configurable | Works, but a cold start pays 40–60 s to load torch, and it only exposes HTTP |
+| GCP Compute Engine `e2-micro` | 1 GB | Always free, works, but 0.25 vCPU sustained makes inference slow |
 | **Oracle Always Free (Ampere A1)** | **12 GB** | What this guide uses |
 
 There is a second reason. **LiveCams need RTMP on port 1935**, and every PaaS free
