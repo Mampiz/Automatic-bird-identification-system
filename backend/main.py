@@ -1,34 +1,35 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Body
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import conint, confloat
-from sqlalchemy.orm import Session
-import numpy as np
-from fastapi import Request
-from datetime import datetime
-from collections import deque
 import asyncio
-
-import os
-import time
-import json
 import hashlib
+import json
+import logging
+import os
+import queue
+import subprocess
 import tempfile
 import threading
-import subprocess
-import queue
-import logging
+import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 import cv2
-from ultralytics import YOLO
+import numpy as np
 from dotenv import load_dotenv
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import confloat, conint
+from sqlalchemy.orm import Session
+from ultralytics import YOLO
+
 load_dotenv()
 
-from db import Base, engine, get_db, SessionLocal
-from models import User, Analysis, Post, VideoJob
-from auth import hash_password, verify_password, create_access_token, get_current_user
-
+# Imported after load_dotenv() on purpose: db reads DATABASE_URL at import time,
+# so the .env file has to be in the environment before these run. E402 is the
+# rule that would have this "fixed" into a broken configuration.
+from auth import create_access_token, get_current_user, hash_password, verify_password  # noqa: E402
+from db import Base, SessionLocal, engine, get_db  # noqa: E402
+from models import Analysis, Post, User, VideoJob  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("birds-backend")
@@ -646,7 +647,7 @@ async def predict_video_annotated(
 
     if os.path.exists(cached_json_path) and os.path.exists(cached_mp4_path):
         existing = db.query(Analysis).filter(Analysis.user_id == current.id, Analysis.video_id == job_id).first()
-        with open(cached_json_path, "r", encoding="utf-8") as f:
+        with open(cached_json_path, encoding="utf-8") as f:
             result = f.read()
 
         if not existing:
@@ -1225,7 +1226,7 @@ async def predict_image(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/predict_frame_fast")
@@ -1262,8 +1263,8 @@ async def predict_frame_fast(
             ),
             timeout=FRAME_INFER_TIMEOUT_SECONDS,
         )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Timeout en inferencia de frame.")
+    except TimeoutError as err:
+        raise HTTPException(status_code=504, detail="Timeout en inferencia de frame.") from err
 
     r = results[0]
     dets = []
@@ -1311,7 +1312,7 @@ def list_live_streams(req: Request):
         items.sort(key=lambda x: x["id"])
         return {"items": items}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.get("/live/streams/{stream_id}")
 def get_live_stream(stream_id: str, req: Request):

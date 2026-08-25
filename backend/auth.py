@@ -1,10 +1,11 @@
-import os
 import logging
+import os
 from datetime import datetime, timedelta
-from jose import jwt, JWTError
-from passlib.context import CryptContext
+
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from db import get_db
@@ -18,7 +19,7 @@ pwd_context = CryptContext(
 )
 
 # JWT config
-JWT_SECRET = os.getenv("JWT_SECRET") 
+JWT_SECRET = os.getenv("JWT_SECRET")
 JWT_ALG = os.getenv("JWT_ALG", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "120"))
 
@@ -62,8 +63,8 @@ def decode_token(token: str) -> str:
         if not user_id:
             raise HTTPException(status_code=401, detail="Token inválido")
         return user_id
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Token inválido o expirado")
+    except JWTError as err:
+        raise HTTPException(status_code=401, detail="Token inválido o expirado") from err
 
 def get_current_user(
     db: Session = Depends(get_db),

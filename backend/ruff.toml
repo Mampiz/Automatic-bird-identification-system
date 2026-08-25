@@ -1,0 +1,42 @@
+# Lint configuration for the backend.
+#
+# The rule set is deliberately narrow. A linter that reports eighty findings on
+# an existing codebase gets switched off, so this selects the rules that catch
+# real defects and leaves the stylistic ones out.
+
+target-version = "py311"
+line-length = 120
+exclude = [".venv", "__pycache__"]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes: undefined names, unused imports, real bugs
+    "W",   # pycodestyle warnings
+    "I",   # import sorting
+    "B",   # bugbear: mutable defaults, shadowed builtins, silent surprises
+    "UP",  # pyupgrade: syntax that is obsolete on the targeted Python
+]
+
+ignore = [
+    # B008 fires on every FastAPI route, because Depends(), File() and Form()
+    # are function calls in argument defaults by design. It is the framework's
+    # documented idiom, not a mutable-default bug.
+    "B008",
+    # Long lines are left to the reader's judgement; the limit above is the cap.
+    "E501",
+]
+
+# Known gaps, listed rather than silently enabled and ignored:
+#
+#   DTZ003  datetime.utcnow() is used throughout, including in column defaults.
+#           Moving to timezone-aware datetimes changes what is written to the
+#           database and deserves its own change, not a lint fix.
+#   BLE001  blind "except Exception" around parsing and cleanup paths. Several
+#           are deliberate - a corrupt result row must not take down a request -
+#           but they should be narrowed one at a time with a test each.
+
+[lint.per-file-ignores]
+# Tests import the application module for its side effects and reach into
+# private helpers on purpose: that is what is being tested.
+"tests/*" = ["S101"]

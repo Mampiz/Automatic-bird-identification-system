@@ -1,9 +1,11 @@
-from sqlalchemy import String, DateTime, ForeignKey, Integer, Float, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from datetime import datetime
 import uuid
+from datetime import datetime
+
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db import Base
+
 
 def _uuid():
     return str(uuid.uuid4())
