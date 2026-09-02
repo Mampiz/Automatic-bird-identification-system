@@ -26,12 +26,38 @@ Developed in collaboration with the environmental association **Alytes (Canyelle
 ![AWS](https://img.shields.io/badge/AWS-ECS%20%C2%B7%20ECR%20%C2%B7%20ALB%20%C2%B7%20RDS-232F3E?logo=amazonaws&logoColor=white)
 ![Cloudflare](https://img.shields.io/badge/Cloudflare-F38020?logo=cloudflare&logoColor=white)
 
-> 📸 **Screenshots wanted** — the repository ships no images. See [Screenshots](#screenshots) for the shot list that would complete this README.
+![Annotated video output — multi-species detection with a live count and top-species HUD](docs/images/video-annotated.jpg)
+
+<p align="center"><em>Annotated video output: three species tracked simultaneously with per-species colours, confidence scores and a running top-species HUD.</em></p>
+
+---
+
+## Demo
+
+A **2 min 46 s screen recording** walks the whole system end to end — registration, image detection, video upload and annotation, publishing to the feed, browser-camera live mode, and the LiveCams HLS pipeline with real-time overlays:
+
+▶️ **[docs/demo/birdvision-demo.mp4](docs/demo/birdvision-demo.mp4)** *(720p, 12 MB — GitHub shows a download link; click through to play it)*
+
+<!--
+  To get an INLINE player instead of a download link: open a new GitHub issue (do not
+  submit it), drag docs/demo/birdvision-demo.mp4 into the comment box, wait for the
+  upload, and copy the generated https://github.com/user-attachments/assets/... URL.
+  Paste that bare URL on its own line in place of the link above — GitHub renders
+  attachment-CDN video URLs as a player. Relative repository paths are never
+  rendered as players, and <video> tags are stripped from README markdown.
+-->
+
+
+<p align="center">
+  <img src="docs/images/livecams-demo.gif" alt="LiveCams: real-time detection overlay on an HLS stream" width="620">
+  <br><em>LiveCams in motion — YOLO detections drawn over a live HLS stream, ~300 ms per inference round-trip.</em>
+</p>
 
 ---
 
 ## Table of Contents
 
+- [Demo](#demo)
 - [Overview](#overview)
 - [Key Features](#key-features)
 - [System Architecture](#system-architecture)
@@ -54,6 +80,7 @@ Developed in collaboration with the environmental association **Alytes (Canyelle
 - [Limitations](#limitations)
 - [Future Work](#future-work)
 - [Technologies](#technologies)
+- [Screenshots](#screenshots)
 - [Author & License](#author--license)
 
 ---
@@ -71,7 +98,13 @@ Four operating modes are implemented:
 | **Live (device camera)** | `getUserMedia` webcam | Browser captures JPEG frames on a timer → `POST /predict_frame_fast` | Canvas bounding-box overlay, live latency/FPS/detection counters |
 | **LiveCams** | RTMP-published camera feeds | FFmpeg → RTMP → NGINX-RTMP → HLS → `<video>`; frames grabbed from the playing element → fast inference endpoint | HLS playback with a synchronized detection overlay |
 
+![Image detection — overlay boxes, per-species filter and the confidence breakdown](docs/images/image-detection.jpg)
+
+<p align="center"><em>Image mode: two species detected at 95.0% and 84.2%, with overlay boxes, a species filter and average-confidence summary.</em></p>
+
 Analysed videos can be **published to a shared public feed**, which is what turns the tool into an outreach/education artefact rather than a private utility.
+
+![Public feed of published analyses](docs/images/feed.jpg)
 
 The UI is written in **Catalan**; backend messages are in Spanish. Species names are the **Catalan common names** used by the source dataset.
 
@@ -258,7 +291,9 @@ Training trajectory (epoch 1 → best): mAP@0.5 0.639 → **0.952**, mAP@0.5:0.9
 
 ### Qualitative results
 
-The repository contains **no evaluation artefacts** — no confusion matrices, PR curves, `results.png`, or sample predictions. Ultralytics generates all of them (`plots=True` is set in every training script). Recommended additions under `docs/images/`:
+Detections from the deployed models, on footage the models did not train on, are shown throughout this README — see [Screenshots](#screenshots) and the [demo recording](#demo).
+
+What is **not** committed is the training-time evaluation output. Ultralytics generates all of it (`plots=True` is set in every training script); copying it out of the relevant `runs/` directory would complete this section:
 
 ```
 docs/images/confusion_matrix_camera.png    # runs/.../confusion_matrix_normalized.png
@@ -401,6 +436,10 @@ flowchart LR
     OV --> UI["Top-species panel<br/>latency / detection counters"]
 ```
 
+![LiveCams grid — cameras discovered from the HLS directory](docs/images/livecams-grid.jpg)
+
+<p align="center"><em>Camera discovery is a directory listing: every <code>.m3u8</code> NGINX publishes shows up as a card, refreshed every 1.2 s.</em></p>
+
 The `LiveCamsPage` component polls `/live/streams` every 1.2 s to keep the camera grid fresh. Selecting a camera opens a full-screen focus view where:
 
 - **hls.js** attaches to the `<video>` (native HLS is used directly on Safari), configured with `maxBufferLength: 8`, `liveSyncDurationCount: 3` and `backBufferLength: 30` for a live-edge profile;
@@ -410,6 +449,10 @@ The `LiveCamsPage` component polls `/live/streams` every 1.2 s to keep the camer
 - detections come back as **normalised** `[x1, y1, x2, y2]` coordinates, which lets the overlay canvas resize freely with the video without any coordinate maths.
 
 **Detection only runs on the focused camera** — the grid view is playback-free and inference-free.
+
+![LiveCams focus view — detection overlay drawn over the HLS player](docs/images/livecams-focus.jpg)
+
+<p align="center"><em>Focus view on <code>cam2</code>: two species at 91.5% and 90.2%, the HLS source URL, the 3 s fixed delay and a 489 ms inference round-trip, all surfaced in the header.</em></p>
 
 > The RTMP publishing step is manual. To feed a test stream from a local file (parameters chosen for low-latency live streaming):
 >
@@ -433,7 +476,13 @@ The `LiveCamsPage` component polls `/live/streams` every 1.2 s to keep the camer
 | `/stream` | `StreamDetector` | Device camera via `getUserMedia({facingMode: "environment"})`, canvas overlay, adjustable confidence (0.10–0.90) and send interval (200–1000 ms), live latency/FPS/detection stat pills, top-species panel |
 | `/live` | `LiveCamsPage` | HLS camera grid + full-screen focus view with real-time detection overlay |
 
+![Device-camera live mode with detection panel and stat pills](docs/images/live-webcam.jpg)
+
+<p align="center"><em><code>/stream</code>: browser-camera mode. Four detections of the same species, 416 ms latency, with confidence and send-interval sliders exposing the operating point directly to the user.</em></p>
+
 Cross-cutting pieces: `AuthProvider` (token + email in `localStorage`, `login`/`register`/`logout`), `AuthGate` (login/registration form with password-strength meter and show/hide toggle — wraps every route), `UserBadge` (session chip + logout).
+
+![Registration form with password-strength meter](docs/images/auth.jpg)
 
 Engineering details worth noting: every route is **lazy-loaded** behind `React.Suspense`, and `vite.config.js` defines **manual chunks** splitting `hls.js` and the React runtime into separate vendor bundles — hls.js is only fetched by users who open a live page. `LiveCamsPage` imports the **light build** (`hls.js/dist/hls.light.mjs`) to drop unused features. Detection colours use the same hash-to-RGB function as the backend's OpenCV renderer, so a species looks the same in a live overlay and in an annotated MP4.
 
@@ -689,12 +738,18 @@ birdvision/
 │   ├── nginx.conf                 # RTMP :1935 → HLS, HTTP :8080 serves /hls with CORS
 │   └── Dockerfile                 # tiangolo/nginx-rtmp + custom config
 │
+├── docs/
+│   ├── images/                    # Screenshots + the LiveCams GIF used in this README
+│   ├── demo/birdvision-demo.mp4   # 2:46 end-to-end walkthrough (720p)
+│   └── deploy-demo.md             # Runbook for the free single-host demo deployment
+│
 ├── .github/workflows/
 │   ├── backend.yml                # ruff + pytest on Python 3.11 and 3.12
 │   └── frontend.yml               # eslint + production build
 │
 ├── LICENSE                        # AGPL-3.0 (see Licence)
-└── docker-compose.yml             # postgres:16 + nginx-rtmp + backend
+├── docker-compose.yml             # postgres:16 + nginx-rtmp + backend (local dev)
+└── docker-compose.prod.yml        # Production stack for the demo host
 ```
 
 ---
@@ -957,21 +1012,22 @@ Honest boundaries of the current system:
 
 ## Screenshots
 
-The repository ships no images. These would make the project immediately legible to a visitor:
+Every asset below lives in [`docs/images/`](docs/images) and is captured from the running system.
 
-| # | Shot | Where from |
-|---|------|-----------|
-| 1 | Landing / login screen | `/` before authentication |
-| 2 | Image detection with overlay boxes and the species panel | `/` → *Imatges* |
-| 3 | Video result — original vs annotated player, progress bar | `/` → *Vídeos* |
-| 4 | Device-camera live mode with stat pills | `/stream` |
-| 5 | LiveCams grid | `/live` |
-| 6 | LiveCams focus view with real-time detection overlay | `/live` → camera |
-| 7 | Public feed | `/feed` |
-| 8 | Confusion matrix + training curves | Ultralytics `runs/` output |
-| 9 | AWS architecture diagram | Project report |
+| Asset | Shows | Where it appears |
+|-------|-------|------------------|
+| `video-annotated.jpg` | Annotated video output — 3 species, per-species colours, live count + top-species HUD | Hero |
+| `image-detection.jpg` | Image mode with overlay boxes, species filter, confidence breakdown | [Overview](#overview) |
+| `feed.jpg` | Public feed of published analyses | [Overview](#overview) |
+| `live-webcam.jpg` | `/stream` device-camera mode with latency/FPS/detection pills | [Frontend](#frontend) |
+| `livecams-grid.jpg` | LiveCams grid — cameras discovered from the HLS directory | [LiveCams](#livecams--real-time-streaming) |
+| `livecams-focus.jpg` | LiveCams focus view with the real-time detection overlay | [LiveCams](#livecams--real-time-streaming) |
+| `livecams-demo.gif` | 6 s loop of live detection over HLS | [Demo](#demo) |
+| `auth.jpg` | Registration form with the password-strength meter | [Frontend](#frontend) |
 
-Drop them in `docs/images/` and reference them as `![Image detection](docs/images/image-detection.png)`.
+Full walkthrough: [`docs/demo/birdvision-demo.mp4`](docs/demo/birdvision-demo.mp4).
+
+**Still missing** — training artefacts, which Ultralytics already generates (`plots=True` in every training script) but which are not committed: `confusion_matrix_normalized.png`, `results.png` (loss + mAP curves), `PR_curve.png`, and a `val_batch*_pred.jpg` ground-truth-vs-prediction pair. Copy them out of the relevant `runs/` directory into `docs/images/` to complete the [Qualitative results](#qualitative-results) section.
 
 ---
 
